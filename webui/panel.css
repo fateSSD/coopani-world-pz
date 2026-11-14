@@ -1,0 +1,209 @@
+/*
+ * 僵毁陪玩 · 面板样式。
+ *
+ * 变量名必须用宿主的那一套：`--ink / --ink-soft / --ink-dim / --line / --sheet-2`。
+ * 之前这里写的是 `--fg / --muted / --panel-bg`，宿主根本不提供这些名字，
+ * 于是全部落到兜底值上 —— 而兜底值是照着深色主题写的（#e8e8ea 这种近白色），
+ * 在宿主的浅色纸面上就是一片发白的字，看着像「UI 坏了」。
+ *
+ * 兜底值现在一律取中性灰：宿主不给变量时在深浅两种主题下都还能读。
+ * 类名统一 `pz-` 前缀，避免和别的扩展撞。
+ */
+
+.pz-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 18px;
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--ink, inherit);
+  background: transparent;
+}
+
+/* ---- 头部 ---- */
+
+.pz-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.pz-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--ink-dim, #8a8a8a);
+}
+
+.pz-dot[data-state='online'] { background: var(--ok, #2f9e44); }
+.pz-dot[data-state='offline'] { background: var(--ink-dim, #8a8a8a); }
+.pz-dot[data-state='error'] { background: var(--danger, #d33); }
+
+.pz-head-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--ink-soft, #555);
+}
+
+.pz-clock {
+  flex: none;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--ink-soft, #555);
+}
+
+/* ---- 血量 ---- */
+
+.pz-vitals {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.pz-hp-label {
+  flex: none;
+  min-width: 72px;
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+  color: var(--ink-soft, #555);
+}
+
+.pz-hp-track {
+  flex: 1;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--line, rgba(128, 128, 128, 0.22));
+  overflow: hidden;
+}
+
+.pz-hp-fill {
+  height: 100%;
+  width: 0;
+  border-radius: 999px;
+  transition: width 320ms ease, background 320ms ease;
+  background: var(--ok, #2f9e44);
+}
+
+.pz-hp-fill[data-band='hurt'] { background: var(--warn, #c98a00); }
+.pz-hp-fill[data-band='bad'] { background: #e07a2f; }
+.pz-hp-fill[data-band='critical'] { background: var(--danger, #d33); }
+.pz-hp-fill[data-band='unknown'] { background: var(--ink-dim, #8a8a8a); }
+
+.pz-tag {
+  flex: none;
+  padding: 1px 8px;
+  border-radius: 999px;
+  font-size: 11px;
+  color: var(--ink-soft, #555);
+  border: 1px solid var(--line, rgba(128, 128, 128, 0.3));
+}
+
+.pz-tag[data-on='yes'] {
+  color: var(--on-accent, #fff);
+  background: var(--danger, #d33);
+  border-color: transparent;
+}
+
+/* ---- 三格 ---- */
+
+.pz-chips {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.pz-chip {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 7px 9px;
+  border-radius: 9px;
+  background: var(--sheet-2, rgba(128, 128, 128, 0.1));
+  min-width: 0;
+}
+
+.pz-chip-k {
+  font-size: 11px;
+  color: var(--ink-dim, #888);
+}
+
+.pz-chip-v {
+  font-size: 13px;
+  color: var(--ink, inherit);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pz-chip[data-tone='warn'] .pz-chip-v { color: var(--warn, #c98a00); }
+.pz-chip[data-tone='danger'] .pz-chip-v { color: var(--danger, #d33); }
+
+/* ---- 背包 ---- */
+
+.pz-row {
+  display: flex;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--ink-soft, #555);
+}
+
+.pz-row-k { flex: none; color: var(--ink-dim, #888); }
+.pz-row-v { font-variant-numeric: tabular-nums; }
+
+/* 状态那一行：轻度只是提亮，到了 bad / critical 才上色。
+   全用一个颜色的话，「有点渴」和「快脱水了」看起来一样重。 */
+.pz-need { color: var(--ink, inherit); }
+.pz-need[data-band='mild'] { color: var(--ink-soft, #777); }
+.pz-need[data-band='bad'] { color: var(--warn, #c98a00); }
+.pz-need[data-band='critical'] { color: var(--danger, #d33); font-weight: 600; }
+
+/* 正打开的那个容器。这一行是「他现在眼前有什么」，用正常字色，不抢清单的注意力。 */
+.pz-loot { color: var(--ink, inherit); }
+
+/* ---- 清单 ---- */
+
+.pz-tips {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.pz-tips-k {
+  font-size: 11px;
+  color: var(--ink-dim, #888);
+}
+
+.pz-tips-list {
+  margin: 0;
+  padding-left: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+  color: var(--ink, inherit);
+}
+
+.pz-tips-list li { line-height: 1.6; }
+
+.pz-tips-none {
+  font-size: 12px;
+  color: var(--ink-dim, #888);
+}
+
+/* ---- 页脚 ---- */
+
+.pz-foot {
+  padding-top: 8px;
+  border-top: 1px solid var(--line, rgba(128, 128, 128, 0.22));
+  font-size: 11px;
+  color: var(--ink-dim, #888);
+  /* 不再 break-all：整条路径断成七八截更像坏了。宁可省略号。 */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

@@ -1,0 +1,10 @@
+node_modules/
+
+# 内部变更记录：写的是开发过程和没对外说的取舍，不进公开仓库
+CHANGELOG.private.md
+
+# 本机游戏侧产物：日志、截图、临时状态
+*.log
+*.png.tmp
+.DS_Store
+Thumbs.db

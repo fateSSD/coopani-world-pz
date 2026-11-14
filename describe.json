@@ -1,0 +1,242 @@
+{
+  "tools": [
+    {
+      "name": "pz_state",
+      "description": "The survivor right now, as the game itself wrote it out: in-game day and clock, whether it is night, indoors or outside and which room, health, infection, hunger, thirst, fatigue, stamina, and the mood stats (pain, panic, stress, unhappiness, boredom), how many zombies are visible, what is in your hands and its condition, and roughly what the bag holds. Also says whether the data is still arriving. Use this whenever you need to know what is happening right now.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "tags": [
+        "read",
+        "snapshot"
+      ],
+      "summary": {
+        "zh": "读此刻的完整处境：第几天、几点、血、感染、饿渴累、心情、视野里多少僵尸、手上拿的什么、背包有什么。",
+        "en": "The current situation in full: day, clock, health, infection, needs, mood, visible zombies, weapon and bag."
+      }
+    },
+    {
+      "name": "pz_recent",
+      "description": "The last few things that actually happened, oldest first: damage taken, getting infected, kills, nightfall, death. Each carries the in-game day it happened on. Use it to remember the run of play instead of guessing.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "description": "How many to return, 1-20. Defaults to 8.",
+            "minimum": 1,
+            "maximum": 20
+          }
+        }
+      },
+      "tags": [
+        "read"
+      ],
+      "summary": {
+        "zh": "最近发生的事：掉血、感染、击杀、入夜、死亡，按时间顺序。",
+        "en": "The last things that happened: damage, infection, kills, nightfall, death."
+      }
+    },
+    {
+      "name": "pz_tips",
+      "description": "A checklist computed from the current state, not from opinion: missing bandages, no water, no light source after dusk, weapon about to break, stamina gone, infection. Empty when nothing is wrong. Use it when the person asks what they should do next or why they keep dying.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {}
+      },
+      "tags": [
+        "read"
+      ],
+      "summary": {
+        "zh": "按当前状态算出来的检查清单：缺绷带、没水、没光源、武器快断、体力见底、感染。没问题时是空的。",
+        "en": "A checklist computed from the state: bandages, water, light, weapon condition, stamina, infection."
+      }
+    },
+    {
+      "name": "pz_journal",
+      "description": "Your own survivor notebook — first person, across runs. Read it with no arguments. `add` writes one short line into a section (alive = how this run is being lived, death = which step killed me, next = what to watch for, unsure = not figured out yet). `drop` removes the first line containing that text. This is NOT a tips sheet: bandages and stamina belong in pz_tips. Write only after a run ends or after a mistake worth remembering — not every close call.",
+      "parameters": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "add": {
+            "type": "string",
+            "description": "One line, first person, at most 120 characters. A conclusion you actually reached, not a sentence copied from a guide."
+          },
+          "section": {
+            "type": "string",
+            "enum": [
+              "alive",
+              "death",
+              "next",
+              "unsure"
+            ],
+            "description": "Where it belongs. Required with `add`."
+          },
+          "drop": {
+            "type": "string",
+            "description": "Remove the first line containing this text."
+          }
+        }
+      },
+      "tags": [
+        "read",
+        "write"
+      ],
+      "summary": {
+        "zh": "读/写她自己的陪玩日记：这局怎么活的、死在哪一步、下回注意、还没想明白。",
+        "en": "Reads and writes her own survivor notebook, across runs."
+      }
+    },
+    {
+      "name": "pz_recipes",
+      "description": "What she could actually make right now, with the exact recipe names. The game itself checks ingredients, required skill, workbench and heat source, so this is \"genuinely possible now\", not \"theoretically craftable\". Ask this before crafting something specific: the names in the reply are what pz_play verb craft expects. Takes a second or two. An empty list is a real answer - she has nothing to work with where she stands.",
+      "summary": {
+        "zh": "现在能做哪些东西（材料、技能、工作台都由游戏判），带配方名，拿去喂给 pz_play 的 craft。",
+        "en": "What she can actually craft right now, with the recipe names to pass to craft."
+      }
+    },
+    {
+      "name": "pz_play",
+      "description": "Not available in this version. The play pipeline is still being tested; the extension does not expose the switch. Calling this returns not-authorized.",
+      "summary": {
+        "zh": "（这一版未开放）让她在游戏里做一个动作。",
+        "en": "(not available in this version) Make her do one thing in the game."
+      }
+    }
+  ],
+  "events": [
+    {
+      "type": "pz.session.start",
+      "description": {
+        "zh": "他进游戏了。",
+        "en": "A save was loaded."
+      },
+      "trigger": "flush"
+    },
+    {
+      "type": "pz.day.start",
+      "description": {
+        "zh": "游戏内换了一天。",
+        "en": "A new in-game day started."
+      },
+      "trigger": "debounce"
+    },
+    {
+      "type": "pz.dusk",
+      "description": {
+        "zh": "天在暗了（19 点后、还没入夜）。",
+        "en": "Dusk: past 19:00 and not yet night."
+      },
+      "trigger": "flush"
+    },
+    {
+      "type": "pz.night",
+      "description": {
+        "zh": "刚入夜。",
+        "en": "Nightfall."
+      },
+      "trigger": "flush"
+    },
+    {
+      "type": "pz.danger",
+      "description": {
+        "zh": "视野里的僵尸跨了一档。",
+        "en": "The visible-zombie count jumped a band."
+      },
+      "trigger": "flush"
+    },
+    {
+      "type": "pz.hurt",
+      "description": {
+        "zh": "掉血。",
+        "en": "Took damage."
+      },
+      "trigger": "flush"
+    },
+    {
+      "type": "pz.need",
+      "description": {
+        "zh": "他自己的状态跨了一档：饿、渴、累、体力、疼、惊恐、压力、心情、无聊。",
+        "en": "One of his own condition stats crossed a band: hunger, thirst, fatigue, stamina, pain, panic, stress, mood, boredom."
+      },
+      "trigger": "flush"
+    },
+    {
+      "type": "pz.weapon",
+      "description": {
+        "zh": "手上的武器耐久见底了（20% 以下，5% 以下会再报一次）。",
+        "en": "The weapon in hand is nearly worn out: under 20%, and again under 5%."
+      },
+      "trigger": "flush"
+    },
+    {
+      "type": "pz.tv",
+      "description": {
+        "zh": "前期电视上有技能课（Life and Living TV）：烹饪、木工、钓鱼、农业、采集。开播前 30 分钟到开播后 60 分钟之间提一次，一天最多一次，第 5 天之后不提。",
+        "en": "A free skill programme is on or starting soon on Life and Living TV. Mentioned once a day, first five days only."
+      },
+      "trigger": "flush"
+    },
+    {
+      "type": "pz.play",
+      "description": {
+        "zh": "轮到她决定下一步了（设置里开了「让她自己动手玩」）。",
+        "en": "It is her turn to decide the next move; the play switch is on."
+      },
+      "trigger": "flush"
+    },
+    {
+      "type": "pz.loot",
+      "description": {
+        "zh": "他正打开的那个容器里有值得停一下的东西（大锤、发电机、好武器、工具、背包、光源、车钥匙）。只看他已经打开的那一个，不预告没翻过的地方。",
+        "en": "The container he has open holds something worth pausing for. Only the one he opened - never a room he has not searched."
+      },
+      "trigger": "flush"
+    },
+    {
+      "type": "pz.infected",
+      "description": {
+        "zh": "被感染了。",
+        "en": "Got infected."
+      },
+      "trigger": "flush"
+    },
+    {
+      "type": "pz.death",
+      "description": {
+        "zh": "死了。",
+        "en": "Died."
+      },
+      "trigger": "flush"
+    },
+    {
+      "type": "pz.kill",
+      "description": {
+        "zh": "一小会儿里连杀了好几只。",
+        "en": "Several kills in a short stretch."
+      },
+      "trigger": "debounce"
+    },
+    {
+      "type": "pz.nudge",
+      "description": {
+        "zh": "清单里那条还悬着（没水、没绷带、武器快断这类），隔一阵提醒一次，换着说法。",
+        "en": "A checklist item is still open; a periodic nudge, reworded each time."
+      },
+      "trigger": "flush"
+    },
+    {
+      "type": "pz.setup",
+      "description": {
+        "zh": "这台机器的环境不对：找不到存档目录、mod 没装进去、或者一直没有数据。",
+        "en": "Environment problem: no save dir, mod not installed, or no data at all."
+      },
+      "trigger": "flush"
+    }
+  ]
+}

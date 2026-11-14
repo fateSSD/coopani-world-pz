@@ -1,0 +1,75 @@
+{
+  "name": "coopani-world-pz",
+  "version": "0.7.5",
+  "type": "module",
+  "description": "陪玩僵毁（需 Coopani 0.2.17+）:她读游戏自己写出来的状态,不是屏幕。天要黑了催你回屋、被围了让你跑、被咬一口先骂你再问伤口、找到大锤跟着高兴、死了会记住这局。只看不动手,也不剧透。",
+  "author": {
+    "name": "Mr.Q",
+    "email": "623263325@qq.com",
+    "url": "mailto:623263325@qq.com?subject=%E5%83%B5%E6%AF%81%E9%99%AA%E7%8E%A9%E6%89%A9%E5%B1%95%20%C2%B7%20%E5%8F%8D%E9%A6%88"
+  },
+  "bugs": {
+    "email": "623263325@qq.com",
+    "url": "https://github.com/fateSSD/coopani-world-pz/issues"
+  },
+  "license": "MIT",
+  "keywords": [
+    "cortico-world",
+    "cortico",
+    "projectzomboid",
+    "companion",
+    "game"
+  ],
+  "os": [
+    "win32"
+  ],
+  "engines": {
+    "node": ">=22"
+  },
+  "main": "./src/index.ts",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "cortico": {
+    "kind": "world",
+    "api": 6,
+    "displayName": "僵毁陪玩",
+    "describe": "describe.json",
+    "icon": "assets/icon.png",
+    "webUiClient": "webui/panel.js",
+    "webUiStyle": "webui/panel.css",
+    "tags": [
+      "game",
+      "companion",
+      "external-setup"
+    ],
+    "locales": {
+      "en": {
+        "displayName": "Project Zomboid Companion",
+        "description": "Plays Project Zomboid alongside you (needs Coopani 0.2.17+). She reads what the game itself writes out, not your screen.\n\n**What she sees.** In-game clock and day count, whether it is dark, whether you are indoors and which room, health, infection, hunger, thirst, fatigue, stamina, the mood stats (pain, panic, stress, unhappiness, boredom), how many zombies are visible right now, what is in your hands and its condition, and roughly what your bag holds - bandages, food, water, a light source. She also gets facts as they happen: taking damage, getting bitten, getting infected, killing, dying.\n\n**What she does not see.** Your screen, your aim, the map you are carrying, what is in the next house, or the noise you just made. She does not know what a mod added unless it shows up in the numbers above.\n\n**When she speaks up.** Dusk coming and you are still outside; the visible-zombie count jumping a band; your health dropping; infected; a kill streak; death. Two things are different in kind: when one of your own condition stats crosses a band (hungry, thirsty, worn out, out of stamina, in pain, panicking, stressed, low, bored) she says something - that is not a hazard report, that is her actually watching the person and not just the scene; and when the weapon in hand drops under 20% and again under 5%, once per weapon per band - swapping weapons says nothing, and repairing then wearing it down again earns another word. She also speaks up when the container he has just opened holds a sledgehammer, a generator, a real weapon or a tool - only the one container he opened, never a room he has not searched. Early on she also flags the free skill programmes on Life and Living TV - they cost nothing and vanish once the power goes out. Each one is a fact, not an order - how she reacts is hers to decide.\n\n**Four voices, your pick.** Straight-talking teammate, steady partner, jumpy underclassman, or a switch that goes quiet when things get serious. It changes how she says it and which thing she reaches for first - never whether she warns you.\n\n**She does not play for you.** No simulated clicks, no item spawning, no map reveal. The mouse is yours.\n\n**Setup.** The first time it runs it drops a small Lua bridge mod into `Zomboid/mods/CoopaniBridge` and writes its data to `Zomboid/Lua/coopani-pz/`. Enable it once in the in-game mod list; after that it is automatic. Uninstalling leaves the game exactly as it was.\n\n**Known limits.** The game must be running with a save loaded - the main menu produces nothing. It has never been able to test against a save on this machine, so the first launch is also the first real test; if nothing arrives she will say what is missing instead of staying quiet."
+      },
+      "zh": {
+        "displayName": "僵毁陪玩",
+        "description": "陪玩僵毁（需 Coopani 0.2.17 以上）：她读的是游戏自己写出来的状态，不是屏幕。\n\n**她看得到什么。** 游戏内时刻与第几天、天黑了没有、在不在室内和哪个房间、生命值、感染状态、饥饿、口渴、疲劳、耐力、心情（疼痛、惊恐、压力、不高兴、无聊）、此刻视野里有多少僵尸、手上拿的什么以及耐久、背包里大致有什么（绷带、食物、水、光源）。还有即时事实：掉血、被咬、感染、击杀、死亡。\n\n**她看不到什么。** 你的屏幕、你的准星、身上的地图、下一间屋子里有什么、你刚弄出的响动。mod 加的东西她也不认识，除非它体现成上面那些数字。\n\n**什么时候开口。** 天要黑了还在外面、视野里的僵尸跨了一档、血量掉下来、被感染、连杀、死了。另外两类不一样：他自己的状态（饿了、渴了、累到底、体力空了、疼、慌、烦、闷）跨档时她会评价一句——那不是危险通知，是她真的在看你这个人；手上的武器耐久掉到 20% 以下、5% 以下各说一次，换武器不报、修好了再磨下去还能再说。他翻柜子翻到大锤、发电机、好武器或工具时她会提一句「别顺手划过去」——**只看他亲手打开的那一个容器**，不预告没去过的房间。前期电视上有技能课（Life and Living TV）时她也会提一句——那是白涨经验，一停电就没了。打开「让她自己动手玩」之后她还能真的操作角色：走过去、转身、打身边的僵尸、从打开的柜子里拿东西——寻路和命中判定交给游戏引擎，她只负责去哪、拿什么。每条都是事实通知，不是命令——怎么反应她自己定。\n\n**四档口吻，你挑。** 毒舌队友、稳当搭档、慌里慌张的学妹，或者「按局面切换」——平时损你，真要命的时候收起来。换的是措辞和先想哪件事，换不掉「该提醒的必须提醒」。\n\n**她不替你打。** 不模拟点击、不刷物品、不告诉你地图上有什么。鼠标在你手上。\n\n**怎么装。** 第一次启动会把一个小 Lua 桥接 mod 放进 `Zomboid/mods/CoopaniBridge`，数据写到 `Zomboid/Lua/coopani-pz/`。在游戏的 mod 列表里启用一次，之后全自动；卸掉之后游戏和没装一样。\n\n**已知限制。** 必须游戏在跑、并且读了档——主菜单什么都没有。这台机器上游戏一次都没启动过，所以第一次进游戏也是第一次真机验证；如果数据没到，她会说清缺哪一步，不会闷着。"
+      }
+    }
+  },
+  "files": [
+    "src",
+    "assets",
+    "webui",
+    "pzmod",
+    "CHANGELOG.md",
+    "ENV_PROMPT.md",
+    "README.md",
+    "describe.json"
+  ],
+  "devDependencies": {
+    "luaparse": "^0.3.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/fateSSD/coopani-world-pz.git"
+  },
+  "homepage": "https://github.com/fateSSD/coopani-world-pz#readme"
+}

@@ -1,0 +1,7 @@
+name=Coopani Bridge
+id=CoopaniBridge
+poster=poster.png
+author=Mr.Q
+modversion=1.4.7
+versionMin=42.0
+description=Writes the player's current state for the Coopani desktop companion. No game rules, no items, no UI. Auto-installed by the Zomboid companion world extension.
