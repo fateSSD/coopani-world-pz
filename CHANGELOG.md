@@ -1,5 +1,14 @@
 # 更新日志
 
+## 0.7.8 — 2026-11-15（自检全绿）
+
+- 两个工具的 `tags` 去掉非法的 `'game'`（`ToolTag` 只有 read / write / speak / act / flow / snapshot；
+  `game` 是**扩展分类**，不能写在工具声明上）。
+- `TOOL_DECLS` 补上 `pz_play` / `pz_recipes` —— 宿主校验的是这个 JS 对象，漏两条就一直报 WARN。
+- `test/lua-syntax.test.mjs` 改用 `import.meta.url` 定位，不再依赖 CWD（之前从别处跑会 ENOENT）。
+- `ENV_PROMPT.md` 的动作数从「十个」改成**实际 23 个**（表里保留常用十个，其余点名，不编语义）。
+- 测试 **176/176**（原来 175/176）。
+
 ## 0.7.7（2026-11-15）
 
 **面板底部加了一块「扩展名旁边那三盏灯怎么看？」**

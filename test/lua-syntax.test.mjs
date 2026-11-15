@@ -15,13 +15,22 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
+/*
+ * 路径按**本文件位置**算，不按 CWD。
+ *
+ * 原来写的是相对路径，在包根跑没事，从别处跑（比如 `node --test <绝对路径>`）
+ * 就 ENOENT —— 2026-11-15 审核里那次「1 个 CWD 相对路径失败」就是它。
+ * 测试的结果不该取决于你在哪个目录敲命令。
+ */
+const ROOT = new URL('..', import.meta.url);
 const FILES = [
   'pzmod/CoopaniBridge/media/lua/client/CoopaniBridge.lua',
   'pzmod/CoopaniBridge/media/lua/shared/CoopaniBridge.lua',
   'pzmod/CoopaniBridge/42.0/media/lua/client/CoopaniBridge.lua',
   'pzmod/CoopaniBridge/42.0/media/lua/shared/CoopaniBridge.lua',
-];
+].map((p) => fileURLToPath(new URL(p, ROOT)));
 
 let luaparse = null;
 try {

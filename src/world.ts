@@ -166,7 +166,7 @@ const TOOL_PLAY = {
       },
     },
   },
-  tags: ['act', 'game'] as const,
+  tags: ['act'] as const,
   summary: {
     zh: '真的在游戏里做一个动作：走过去、转身、打身边的僵尸、从打开的柜子里拿东西、开门关门、吃东西、喝水、做饭、立刻停下。要设置里打开「让她自己动手玩」。',
     en: 'Do one thing in the game: walk, face, attack, take, door, eat, drink, cook, stop. Requires the play switch on.',
@@ -182,7 +182,7 @@ const TOOL_RECIPES = {
     + 'It takes a second or two: the request goes to the game and the answer arrives with the next poll. '
     + 'An empty list is a real answer: she has nothing to work with where she stands.',
   parameters: { type: 'object', additionalProperties: false, properties: {} },
-  tags: ['read', 'game'] as const,
+  tags: ['read'] as const,
   summary: {
     zh: '现在能做哪些东西（材料、技能、工作台都由游戏判），带配方名，拿去喂给 pz_play 的 craft。',
     en: 'What she can actually craft right now, with the recipe names to pass to craft.',
@@ -219,7 +219,17 @@ const TOOL_JOURNAL = {
   },
 };
 
-const TOOL_DECLS = [TOOL_STATE, TOOL_RECENT, TOOL_TIPS, TOOL_JOURNAL] as const;
+/*
+ * **每一个工具都要在这里出现**（2026-11-15 修）。
+ *
+ * 宿主校验的是这个 JS 对象（`WorldDefinition.describe.tools`），不是磁盘上的
+ * `describe.json`。原来只放了四个，`pz_play` 和 `pz_recipes` 漏在外面 ——
+ * 于是每次启动都报「工具不在 describe.tools 里,照常生效」，功能没坏，
+ * 所以这条 WARN 挂了两周没人管。
+ */
+const TOOL_DECLS = [
+  TOOL_STATE, TOOL_RECENT, TOOL_TIPS, TOOL_JOURNAL, TOOL_PLAY, TOOL_RECIPES,
+] as const;
 
 /* ---------------------------------------------------------------- 口吻 */
 
