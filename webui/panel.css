@@ -207,3 +207,49 @@
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+/*
+ * 「灯怎么看」。默认折叠。
+ *
+ * 颜色一律走宿主的变量 + 兜底 —— 这个文件开头就写着「变量名必须用宿主那一套」，
+ * 之前写错名字导致全部落到深色兜底值上，浅色纸面里一片发白的字。
+ *
+ * 只有红是硬编码的：宿主没提供 error 色，而 #c0392b 在深浅两种主题下都能读。
+ */
+.pz-help {
+  margin-top: 4px;
+  padding-top: 10px;
+  border-top: 1px dashed var(--line, #e5e7eb);
+  font-size: 12.5px;
+}
+.pz-help summary {
+  cursor: pointer;
+  list-style: none;
+  color: var(--ink-soft, #6b7280);
+}
+.pz-help summary::-webkit-details-marker { display: none; }
+.pz-help summary::before { content: '\25B8  '; }
+.pz-help[open] summary::before { content: '\25BE  '; }
+.pz-help summary:hover { text-decoration: underline; }
+.pz-help ul {
+  margin: 9px 0 0;
+  padding-left: 2px;
+  list-style: none;
+  line-height: 2.05;
+  color: var(--ink-soft, #6b7280);
+}
+.pz-help li b { color: var(--ink, #1b1e24); font-weight: 600; }
+.pz-help-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  margin-right: 7px;
+  vertical-align: middle;
+}
+.pz-help-which {
+  margin: 9px 0 0;
+  font-size: 12px;
+  line-height: 1.8;
+  color: var(--ink-dim, #9ca3af);
+}

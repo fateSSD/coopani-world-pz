@@ -10,6 +10,14 @@
 
 const TEXT = {
   zh: {
+    helpTitle: '扩展名旁边那三盏灯怎么看？',
+    helpOn: '绿',
+    helpOnDesc: '上一次是好的，正常。',
+    helpOff: '灰',
+    helpOffDesc: '没启用，不是坏了。不用管。',
+    helpErr: '红',
+    helpErrDesc: '能读到但不对，要去处理。原因和怎么办，鼠标停在灯上能看到。',
+    helpWhich: '三盏灯分别是：游戏（连得上存档吗）、桥接（模组装好没有）、日记（写得进去吗）。',
     title: '她此刻',
     linkOk: '在跟',
     linkMenu: '游戏在跑，没读档',
@@ -55,6 +63,14 @@ const TEXT = {
     day: (n, clock) => `第 ${n} 天 ${clock}`,
   },
   en: {
+    helpTitle: 'What do the three dots next to the extension name mean?',
+    helpOn: 'Green',
+    helpOnDesc: 'last time worked. Normal.',
+    helpOff: 'Grey',
+    helpOffDesc: 'not enabled — that is not a fault. Nothing to do.',
+    helpErr: 'Red',
+    helpErrDesc: 'readable but wrong. Hover the dot for the reason and the fix.',
+    helpWhich: 'The three are: game (can it reach the save), bridge (is the mod installed), journal (can it write).',
     title: 'What she sees',
     linkOk: 'Following',
     linkMenu: 'Game running, no save',
@@ -108,6 +124,35 @@ const el = (doc, tag, cls, text) => {
   return node;
 };
 
+/**
+ * 「灯怎么看」。默认折叠。
+ *
+ * 灯是宿主画在扩展名旁边的，不在这个面板里 —— 而 hint 只在悬停时出现，
+ * **没人知道要悬停**。所以面板里得有一块能查。
+ *
+ * 颜色走宿主的变量（pz 的样式一律用 `--ink / --ink-soft / --line` + 兜底），
+ * 只有红是硬编码的 —— 宿主没提供 error 色，而 #c0392b 在深浅两种主题下都能读。
+ */
+function lampsHelp(doc, t) {
+  const box = el(doc, 'details', 'pz-help');
+  box.append(el(doc, 'summary', null, t.helpTitle));
+
+  const ul = el(doc, 'ul');
+  for (const [color, k, d] of [
+    ['#5f7d5a', 'helpOn', 'helpOnDesc'],
+    ['#9ca3af', 'helpOff', 'helpOffDesc'],
+    ['#c0392b', 'helpErr', 'helpErrDesc'],
+  ]) {
+    const li = el(doc, 'li');
+    const dot = el(doc, 'span', 'pz-help-dot');
+    dot.style.background = color;
+    li.append(dot, el(doc, 'b', null, t[k]), doc.createTextNode('　' + t[d]));
+    ul.append(li);
+  }
+  box.append(ul, el(doc, 'p', 'pz-help-which', t.helpWhich));
+  return box;
+}
+
 function mount(ctx) {
   const doc = ctx.root.ownerDocument ?? document;
   const t = TEXT[String(ctx.language || 'zh').toLowerCase().startsWith('zh') ? 'zh' : 'en'];
@@ -135,7 +180,10 @@ function mount(ctx) {
   const tipsBox = el(doc, 'div', 'pz-tips');
   const foot = el(doc, 'div', 'pz-foot');
 
-  wrap.append(head, vitals, chips, needRow, bagRow, lootRow, tipsBox, foot);
+  /* 灯说明放在最底下 —— 用户是「看到灰点、滚下来找答案」才需要它。 */
+  const helpBox = lampsHelp(doc, t);
+
+  wrap.append(head, vitals, chips, needRow, bagRow, lootRow, tipsBox, helpBox, foot);
   ctx.root.append(wrap);
 
   const setChip = (label, value, tone) => {
