@@ -1,6 +1,6 @@
 {
   "name": "coopani-world-pz",
-  "version": "0.7.5",
+  "version": "0.7.6",
   "type": "module",
   "description": "陪玩僵毁（需 Coopani 0.2.17+）:她读游戏自己写出来的状态,不是屏幕。天要黑了催你回屋、被围了让你跑、被咬一口先骂你再问伤口、找到大锤跟着高兴、死了会记住这局。只看不动手,也不剧透。",
   "author": {
