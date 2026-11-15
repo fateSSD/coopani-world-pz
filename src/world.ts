@@ -1283,7 +1283,7 @@ export class PzWorld implements World {
 
     // 「文件放进去了」和「游戏里勾上了」是两件事。后者才是真正决定有没有数据的那一步。
     const bridge: WorldLamp = !this.install
-      ? { label: '桥接', state: 'offline', hint: '还没检查（游戏目录没找到之前不装）。' }
+      ? { label: '桥接', state: 'offline', hint: '还没检查过 —— 先开一次游戏，它会自己去找目录。' }
       : this.install.state === 'failed'
         ? { label: '桥接', state: 'error', hint: this.install.detail }
         : this.install.state === 'skipped'
