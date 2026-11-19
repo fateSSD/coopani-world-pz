@@ -30,6 +30,11 @@ export interface Outgoing {
   trigger: Trigger;
   /** 跳过「同一类型最短间隔」的节流。真正会死人的那几种才配。 */
   urgent: boolean;
+  /** 供延迟重算（如 pz.nudge）读取的结构化载荷，避免从已拼装文本反解。 */
+  nudgeMeta?: {
+    tip: string;
+    before: string[];
+  };
 }
 
 export interface JudgeState {
@@ -389,6 +394,41 @@ function judgeLoot(
  * 前提是**还有电**（默认 0–30 天内随时停）。数据里读不到电，
  * 所以措辞必须留余地，不能断言「现在就能看」。
  */
+export function formatTvText(sit: Situation): string | null {
+  const day = sit.day;
+  if (day === null) return null;
+  const hit = tvNow(sit);
+  if (!hit) return null;
+  const name = TV_SKILL_ZH[hit.slot.skill];
+  const rest = hit.later.map((s) => `${hhmm(s.from)} ${TV_SKILL_ZH[s.skill]}`);
+  return [
+    hit.upcoming
+      ? `〔提醒·happy〕电视上 ${hhmm(hit.slot.from)} 有**${name}课** —— 频道是 **${TV_CHANNEL}**（调频 ${TV_FREQ}）。`
+      : `〔提醒·happy〕电视上**正在播${name}课** —— 频道是 **${TV_CHANNEL}**（调频 ${TV_FREQ}）。`,
+    `第 ${day} 天 ${sit.clockText ?? ''}，${sit.placeText}。`
+      + (rest.length ? `今天后面还有：${rest.join('、')}。` : ''),
+    // 中文版里这个频道名**没翻译**，照抄原文就行。他要是问「哪个台」，
+    // 答案必须是这串英文 + 频率，意译了他照着找不到。
+    `频道名就照抄 \`${TV_CHANNEL}\`，别翻译成中文 —— 游戏里显示的就是这串英文。`
+      + '他翻电视的频道列表时，按这串字找。',
+    '这是前期最划算的一笔：坐在电视前看，技能白涨，不用出门冒风险。'
+      + '前提是还没停电 —— 所以只能说「有电就去看」，别断言他现在就能看。',
+    '一件事就够，别顺带把整个节目表倒出来，也别把它说成任务。',
+    MARK('happy'),
+  ].filter(Boolean).join('\n');
+}
+
+export function formatNudgeText(sit: Situation, tip: string, before: readonly string[] = []): string {
+  const day = sit.day ?? 0;
+  return [
+    `〔提醒·随口〕这条还悬着：${tip}`,
+    `现在：第 ${day} 天 ${sit.clockText ?? ''}，${sit.placeText}，血量 ${sit.hp ?? '?'}%。`,
+    before.length ? `前两回已经说过：${before.join(' / ')}` : '',
+    '换一种说法 —— 别用上次的句式，也别把清单原文整句念出来。一句话就够，'
+      + '说完该干嘛干嘛，不要追问，也别把它说成新发现的危险。',
+  ].filter(Boolean).join('\n');
+}
+
 function judgeTv(
   sit: Situation,
   next: JudgeState,
@@ -399,34 +439,17 @@ function judgeTv(
   const day = sit.day;
   if (day === null || next.tvDay === day) return null;
 
-  const hit = tvNow(sit);
-  if (!hit) return null;
+  const text = formatTvText(sit);
+  if (!text) return null;
   if (!take()) return null;
 
   next.tvDay = day;
-  const name = TV_SKILL_ZH[hit.slot.skill];
-  const rest = hit.later.map((s) => `${hhmm(s.from)} ${TV_SKILL_ZH[s.skill]}`);
-
   return {
     type: 'pz.tv',
     key: `pz.tv:${sit.session ?? ''}:${day}`,
     trigger: 'flush',
     urgent: false,
-    text: [
-      hit.upcoming
-        ? `〔提醒·happy〕电视上 ${hhmm(hit.slot.from)} 有**${name}课** —— 频道是 **${TV_CHANNEL}**（调频 ${TV_FREQ}）。`
-        : `〔提醒·happy〕电视上**正在播${name}课** —— 频道是 **${TV_CHANNEL}**（调频 ${TV_FREQ}）。`,
-      `第 ${day} 天 ${sit.clockText ?? ''}，${sit.placeText}。`
-        + (rest.length ? `今天后面还有：${rest.join('、')}。` : ''),
-      // 中文版里这个频道名**没翻译**，照抄原文就行。他要是问「哪个台」，
-      // 答案必须是这串英文 + 频率，意译了他照着找不到。
-      `频道名就照抄 \`${TV_CHANNEL}\`，别翻译成中文 —— 游戏里显示的就是这串英文。`
-        + '他翻电视的频道列表时，按这串字找。',
-      '这是前期最划算的一笔：坐在电视前看，技能白涨，不用出门冒风险。'
-        + '前提是还没停电 —— 所以只能说「有电就去看」，别断言他现在就能看。',
-      '一件事就够，别顺带把整个节目表倒出来，也别把它说成任务。',
-      MARK('happy'),
-    ].filter(Boolean).join('\n'),
+    text,
   };
 }
 
@@ -677,13 +700,8 @@ export function judge(
         key: `pz.nudge:${sit.session ?? ''}:${Math.floor(nowMs / 60000)}`,
         trigger: 'flush',
         urgent: false,
-        text: [
-          `〔提醒·随口〕这条还悬着：${tip}`,
-          `现在：第 ${day} 天 ${sit.clockText ?? ''}，${sit.placeText}，血量 ${sit.hp ?? '?'}%。`,
-          before.length ? `前两回已经说过：${before.join(' / ')}` : '',
-          '换一种说法 —— 别用上次的句式，也别把清单原文整句念出来。一句话就够，'
-            + '说完该干嘛干嘛，不要追问，也别把它说成新发现的危险。',
-        ].filter(Boolean).join('\n'),
+        text: formatNudgeText(sit, tip, before),
+        nudgeMeta: { tip, before },
       });
     }
 

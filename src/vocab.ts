@@ -80,7 +80,7 @@ export function pickMotion(v: Vocab, want: string): string | null {
 export function describeVocab(v: Vocab): string {
   const tail = v.note ? `\n（${v.note}）` : '';
   return [
-    '表情和动作都写成中文名，放进【】里，跟台词一起：`【平静】这屋里有动静。` 只写表情不写动作，人不会动。',
+    '把表情和动作写进尖括号标记 `<...>`（例如 `<worried>`、`pet_say: <worried>这屋里有动静。`），后面必须跟着话，只写表情不写动作，人不会动。',
     '**名字只用当前形象词表里真有的那些**（见上下文里「当前形象的词表」那段，由桌宠那边给）。写表外的会被静默丢掉 —— 她不解释，你也不会收到报错。',
     '查不到合适的词就只写表情。宁可少动一下，别赌一个可能不存在的名字。',
   ].join('\n') + tail;

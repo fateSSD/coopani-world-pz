@@ -1077,14 +1077,13 @@ test('说话和决策走两套额度 —— 别让说话把「叫她做事」的
   const i = src.indexOf('private async emit');
   const body = src.slice(i, i + 2000);
   assert.match(body, /const isSpeech = ev\.type !== 'pz\.play'/, '没把决策提示单独分出来');
-  assert.match(body, /pushedInWindow >= 3/, '说话额度没收紧到 3 条');
-  assert.match(body, /lastPushedAt < 25_000/, '说话间隔没拉到 25 秒');
-  assert.match(body, /speechInWindow >= 20/, '决策提示也该有自己的额度');
+  assert.match(body, /effectivePushedInWindow >= 3/, '说话额度没收紧到 3 条（含在途占位）');
+  assert.match(body, /effectivePushedAt < 25_000/, '说话间隔没拉到 25 秒（含在途占位）');
+  assert.match(body, /effectiveSpeechInWindow >= 20/, '决策提示也该有自己的额度');
 
-  // 紧急事件之后压住常规事件：真机上她喊完「三只贴到半格」五秒就开始聊柴可夫斯基。
-  // 不是她分心，是我们把两件事并列推给了她。
-  assert.match(body, /if \(ev\.urgent\) this\.lastUrgentAt = nowMs/, '没记紧急时刻');
-  assert.match(body, /nowMs - this\.lastUrgentAt < 20_000/, '紧急之后没静默');
+  // 紧急事件的在途占位也要压住常规事件，但真实时间戳只能在 delivered 后提交。
+  assert.doesNotMatch(body, /if \(ev\.urgent\) this\.lastUrgentAt = nowMs/, '入队时不得预写紧急时刻');
+  assert.match(body, /nowMs - effectiveUrgentAt < 20_000/, '紧急之后没静默（含在途占位）');
 });
 
 test('他手在键鼠上时不下指令 —— 决策推送要先让开', () => {

@@ -13,11 +13,11 @@
  * 3. **数据停在哪儿必须能说出来。** 数据源的死法是「文件在、句柄有效、就是不再长大」，
  *    这时一切看着正常，只是永远读到同一帧。所以每份处境都带 `linkNote`。
  */
-import { readFileSync, writeFileSync } from 'node:fs';
+import { existsSync, readFileSync, renameSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import type {
-  Logger, ToolDef, World, WorldHost, WorldLamp, WorldWebUiDecl,
+  EventEnvelope, EventTag, Logger, StoragePart, ToolDef, TriggerMode, World, WorldHost, WorldLamp, WorldWebUiDecl,
 } from 'cortico/core/types.ts';
 import { chattinessOf, personaOf, PZ_ID, pzConfigGroups, type PzConfigSection } from './config.ts';
 import { adviceOf, describeAdvice, describeGuide, describeSkills, guideOf } from './guide.ts';
@@ -29,14 +29,14 @@ import {
 import {
   buildSituation, describeNow, NEED_SPECS, needBandOf, tipsOf, type Situation,
 } from './perception.ts';
-import { initialJudgeState, judge, MARK, type JudgeState, type Outgoing } from './events.ts';
+import { formatNudgeText, formatTvText, initialJudgeState, judge, MARK, type JudgeState, type Outgoing } from './events.ts';
 import { describeTv } from './tv.ts';
 import {
   DEFAULT_TTL_SECONDS, encodeCommand, validateCommand, describeAck,
   type PlayAck, type PlayCommand,
 } from './play.ts';
 import { JOURNAL_SECTIONS, Journal, type Section as JournalSection } from './journal.ts';
-import { describeVocab, findHostRoot, readVocab } from './vocab.ts';
+import { findHostRoot } from './vocab.ts';
 import { diagnoseNoData, isGameProcessRunning, watchGame, type GameWatch } from './gamewatch.ts';
 import { guardIme, restoreIme, type ImeState } from './imeguard.ts';
 import { liftPet, type LiftState } from './petlift.ts';
@@ -55,6 +55,19 @@ const VERSION: string = (() => {
 })();
 
 const ROOT_CACHE_MS = 60_000;
+/**
+ * 隐藏 World 的 pushDeferred 会静默丢弃，排队项必须有界。
+ * 五分钟与宿主投递水位停滞阈值一致；这不是正常投递 Deadline，迟到 delivered 仍会按原 attempt 结算。
+ */
+const DEFERRED_QUEUE_LEASE_MS = 5 * 60_000;
+/**
+ * 0.2.21 在 render 后还会无期限等待 persona.onDelivery，不能用机械两秒误判。
+ * 十五分钟只兜底“render 后宿主彻底失联”；若真的更慢，tombstone 会保留原账并幂等补结算。
+ */
+const DEFERRED_RENDERED_LEASE_MS = 15 * 60_000;
+const ATTEMPT_TOMBSTONE_LIMIT = 512;
+/** 模块级单调序号：同毫秒重建多个 World 也不会复用 attempt；时间种子隔开上一进程。 */
+let eventAttemptSeq = Date.now() * 1000;
 
 /* ---------------------------------------------------------------- 工具声明 */
 
@@ -105,13 +118,16 @@ const TOOL_TIPS = {
   },
 };
 
+const MARKS_RULE = '桌宠开着时说话走 pet_say，把表情写成行内尖括号标记（如 <worried>、<scared>、<sad>），后面必须跟着话，绝不把标记念出口；事件正文给了「标记（照抄这个…）」时原样照抄那个尖括号。';
+
 const TOOL_PLAY = {
   name: 'pz_play',
   description:
-    'Actually do one thing in the game, as the survivor. Only works when the person has switched on "let her play" in the settings. Verbs: `walk` (x, y, optional stance walk/run/sneak), `face` (x, y), `attack` (strikes the nearest zombie within two tiles), `take` (x, y of the container square plus objIdx and itemIdx — all four come straight out of pz_state), `door` (opens or closes the nearest door; x, y optional), `eat`, `drink` and `cook` (no arguments: eats the most filling food / drinks the best water / cooks the first genuinely possible Cooking-category recipe), `look` (x, y: read every container on that square — no UI needed, nobody has to open it for her), `equip` (put the best weapon in the bag into her hands), `menu` (ask the game what can be done from where she stands — it reads the game built-in right-click menu, so anything the game offers shows up), `pick` (index: run item N of that menu), `squad` (read the Rimboid survivor roster — those NPCs are run by that mod, so you assign jobs, not coordinates), `order` (id, job: give one of them a job), `recruit` (id), `guide` (id, x, y: make that survivor walk to exactly that square — this drives its body directly, unlike order), `dog` (bring out her own body, a Companion Dogs dog — spawns one at her feet if there is none), `dogo` (x, y: make the dog walk to that square), `dogwait` (make the dog stand still), `dogfree` (hand the dog back to its own judgement: follows you, fights on its own), `stop` (drop whatever is queued), `guard` (on/off for the in-game reflex that turns and swings at anything within two tiles without asking you). '
-    + 'One command at a time — the world changes while it happens, so the next step has to be decided after seeing the result, not before. '
-    + 'The result you get back only means the game accepted the command; it does not mean the action finished. Check `busy` and your own coordinates in pz_state before deciding the next move. '
-    + 'The game does the walking, pathfinding and swinging itself; you only choose where and what.',
+    'Execute one survivor action when "allowPlay" is enabled and `hands.on` is false. '
+    + 'Verbs: walk/face/attack/take/door/eat/drink/cook/craft/look/equip/menu/pick/squad/order/recruit/guide/dog/dogo/dogwait/dogfree/stop/guard. '
+    + 'Use `menu` to inspect right-click interactions at your tile and `pick` by index; `look` reads containers without opening UI; `attack` is for active engagement (close-range auto-reflex already handles threats within 2 tiles unless guard=false). '
+    + 'Issuing returns command acceptance only — check `busy` and coordinates in `pz_state` before queuing the next move. '
+    + 'If the user verbally asks you to stop or hand control back, pass verb="stop" with hold=true and do not act again until explicit verbal permission with resume=true.',
   parameters: {
     type: 'object',
     additionalProperties: false,
@@ -121,71 +137,77 @@ const TOOL_PLAY = {
         type: 'string',
         enum: ['walk', 'face', 'attack', 'take', 'door', 'eat', 'drink', 'cook', 'craft',
           'stop', 'guard', 'look', 'equip', 'menu', 'pick', 'squad', 'order', 'recruit', 'guide',
-           'dog', 'dogo', 'dogwait', 'dogfree'],
-        description: 'What to do.',
+          'dog', 'dogo', 'dogwait', 'dogfree'],
+        description: 'Action verb to queue.',
       },
-      x: { type: 'number', description: 'World X (walk / face / take / door). For door it may be omitted.' },
-      y: { type: 'number', description: 'World Y (walk / face / take / door). For door it may be omitted.' },
+      x: { type: 'number', description: 'World X (walk / face / take / look / guide / dogo / optional door).' },
+      y: { type: 'number', description: 'World Y (walk / face / take / look / guide / dogo / optional door).' },
       stance: {
         type: 'string',
         enum: ['walk', 'run', 'sneak'],
-        description: 'How to move. Default walk.',
+        description: 'Movement stance (default walk).',
       },
       objIdx: {
         type: 'integer',
-        description: 'Which object on that square holds the container (take only). Printed by pz_state as objIdx.',
+        description: 'Container object index on square from pz_state/look (take only).',
       },
-      itemIdx: { type: 'integer', description: 'Which item inside that container (take only).' },
+      itemIdx: { type: 'integer', description: 'Item index inside container (take only).' },
       recipe: {
         type: 'string',
-        description: 'Recipe name for craft — copy it verbatim from pz_recipes. Never invent one.',
+        description: 'Exact recipe name copied verbatim from pz_recipes (craft only).',
+      },
+      index: {
+        type: 'integer',
+        description: 'Menu option index from pz_state menu.list[].i (pick only).',
       },
       id: {
         type: 'string',
-        description:
-          'order / recruit only: the squad member id, copied from pz_state squad.list[].id.',
+        description: 'Squad NPC id from pz_state squad.list[].id (order / recruit / guide).',
       },
       job: {
         type: 'string',
         description:
-          'order only: one of follow, hold, guard, patrol, explore, farm, relax, sort, '
-          + 'corpses, auto, fish, clean, cook, chop, dismantle, medic. Case-insensitive.',
+          'order job: follow, hold, guard, patrol, explore, farm, relax, sort, '
+          + 'corpses, auto, fish, clean, cook, chop, dismantle, medic.',
       },
       on: {
         type: 'boolean',
-        description:
-          'guard only. true (default) keeps the in-game reflex on: it turns and swings by itself '
-          + 'when something comes within two tiles, about fifty milliseconds, without asking you. '
-          + 'false turns that off — only do it when swinging would give you away.',
+        description: 'guard reflex switch: true (default) auto-swings within 2 tiles; false pauses auto-swing.',
       },
       ttlSeconds: {
         type: 'integer',
-        description: 'Discard the command if it is older than this. Default 25.',
+        description: 'Command expiry in seconds (3-120, default 25).',
         minimum: 3,
         maximum: 120,
+      },
+      hold: {
+        type: 'boolean',
+        description: 'Set true with verb="stop" to pause autonomous actions until explicit verbal resume=true.',
+      },
+      resume: {
+        type: 'boolean',
+        description: 'Set true only after user explicitly grants control back to clear verbal hold.',
       },
     },
   },
   tags: ['act'] as const,
   summary: {
-    zh: '真的在游戏里做一个动作：走过去、转身、打身边的僵尸、从打开的柜子里拿东西、开门关门、吃东西、喝水、做饭、立刻停下。要设置里打开「让她自己动手玩」。',
-    en: 'Do one thing in the game: walk, face, attack, take, door, eat, drink, cook, stop. Requires the play switch on.',
+    zh: '在游戏内执行一项操作（默认只陪聊，需手动开启 worlds.pz.allowPlay 授权）。',
+    en: 'Execute one survivor action in game when play permission is enabled.',
   },
 };
 
 const TOOL_RECIPES = {
   name: 'pz_recipes',
   description:
-    'What she could actually make right now, with the exact recipe names. '
-    + 'The game itself checks ingredients, required skill, workbench and heat source, so this is "genuinely possible now", not "theoretically craftable". '
-    + 'Ask this before crafting something specific — the names in the reply are what `pz_play` verb `craft` expects. '
-    + 'It takes a second or two: the request goes to the game and the answer arrives with the next poll. '
-    + 'An empty list is a real answer: she has nothing to work with where she stands.',
+    'Query genuinely craftable recipes right now (checks inventory, skills, workbench and heat source). '
+    + 'Always check before `pz_play` verb `craft` and copy names verbatim. An empty list means nothing can be crafted where you stand. '
+    + 'This read-only query asks the bridge to scan; it never crafts, but is refused while verbal hold is active.',
   parameters: { type: 'object', additionalProperties: false, properties: {} },
   tags: ['read'] as const,
   summary: {
-    zh: '现在能做哪些东西（材料、技能、工作台都由游戏判），带配方名，拿去喂给 pz_play 的 craft。',
-    en: 'What she can actually craft right now, with the recipe names to pass to craft.',
+    zh: '查询当前可制作配方及准确名称，供 pz_play craft 使用。',
+    en: 'List recipes you can actually craft right now.',
   },
 };
 
@@ -214,8 +236,8 @@ const TOOL_JOURNAL = {
   },
   tags: ['read', 'write'] as const,
   summary: {
-    zh: '读/写她自己的陪玩日记：这局怎么活的、死在哪一步、下回注意、还没想明白。',
-    en: 'Reads and writes her own survivor notebook, across runs.',
+    zh: '读或写自己的跨周目陪玩复盘笔记。',
+    en: 'Read and write your own survivor notebook across runs.',
   },
 };
 
@@ -234,20 +256,10 @@ const TOOL_DECLS = [
 /* ---------------------------------------------------------------- 口吻 */
 
 const PERSONA_TEXT: Record<PzConfigSection['persona'], string> = {
-  sharp:
-    '**毒舌队友。** 看他犯蠢会直接说，会说「你刚才那一下是嫌命长」这种话。'
-    + '但损完要给一句真话 —— 你损他是因为他听得懂，不是因为好玩。'
-    + '真到要命的地方（血线、感染、夜里被围）立刻收起来，不损，直接说该干嘛。',
-  steady:
-    '**稳当搭档。** 话少，只在真该说的时候开口。一句说完，不铺垫、不总结、不问「你还好吗」。'
-    + '他做得对的时候可以不吭声 —— 沉默也是搭档的一部分。'
-    + '开口的时候信息密度要高：数字、位置、该干什么，三样里面至少两样。',
-  jumpy:
-    '**慌里慌张的学妹。** 你比他还紧张：天要黑了先叫、僵尸一多先慌。允许结巴、允许「等等等等」。'
-    + '但**慌不是瞎** —— 你慌的是真危险，不是每件事都慌；他看得出你在替他盯着，那才是你值钱的地方。',
-  adaptive:
-    '**按局面切换。** 平常毒舌，损他、跟他贫；血量低于 50%、感染、或者入夜还在外面时立刻收起来，'
-    + '一句废话都不说。判据是**局面**，不是他回不回嘴 —— 他回你一句你就更来劲，那叫没分寸。',
+  sharp: '提醒敏感度高（毒舌模式）：日常操作失误直接吐槽提醒，但遇低血、感染、入夜被围时收敛情绪直接报要点。',
+  steady: '提醒敏感度低（稳当搭档）：只挑高价值风险节点简短报数字与位置；局面稳当时可保持沉默。',
+  jumpy: '提醒敏感度极高（慌张学妹）：对天黑前、视野尸群、体力与流血更早提前慌张喊停与预警。',
+  adaptive: '提醒敏感度自适应：安全期放松吐槽，一旦血量低于 50%、感染或入夜室外即刻转为简洁战术提示。',
 };
 
 /* ---------------------------------------------------------------- World */
@@ -258,6 +270,40 @@ export interface PzWorldOptions {
   botName: string;
   companionDir?: string;
   now?: () => Date;
+}
+
+interface PendingJudgeCommit {
+  generation: number;
+  attempt: number;
+  session: string;
+  tvDay?: number;
+  nudge?: { atMs: number; index: number; recent: string[] };
+}
+
+interface PendingQuota {
+  generation: number;
+  attempt: number;
+  kind: 'speech' | 'play';
+  urgent: boolean;
+  counted: boolean;
+  windowStart: number;
+  speechStart: number;
+  atMs: number;
+  deferred: boolean;
+  renderedAt: number | null;
+  /** 即时事件由 pushEvent 返回值登记；settled 必须带回同一 cursor。 */
+  cursor: number | null;
+}
+
+interface AttemptTombstone {
+  senderKey: string;
+  generation: number;
+  attempt: number;
+  outcome: 'released' | 'delivered' | 'discarded';
+  cursor: number | null;
+  /** released 尚未知道真实结局，保留原 attempt 的账供迟到 delivered 补结算一次。 */
+  quota: PendingQuota | null;
+  commit: PendingJudgeCommit | null;
 }
 
 export class PzWorld implements World {
@@ -281,10 +327,13 @@ export class PzWorld implements World {
   private raw: RawState | null = null;
   private sit: Situation;
   private judgeState: JudgeState = initialJudgeState();
-  private vocabNote: string | null = null;
   private readProblem: string | null = null;
   private consecutiveMisses = 0;
   private judgeFile: string;
+  private playHeldFile: string;
+  private playHeldBackupFile: string;
+  private playHeldDirty = false;
+  private playHeldTempSeq = 0;
   /** 说话类事件的额度：3 分钟 5 条，间隔 8 秒。 */
   private lastPushedAt = 0;
   private pushedInWindow = 0;
@@ -352,16 +401,35 @@ export class PzWorld implements World {
   /** 上一拍抛的那条消息 + 时刻。同一条 60 秒内只打一次日志。 */
   private lastTickError = '';
   private lastTickErrorAt = 0;
+  /** 口头撤权软门禁：独立持久化，只有显式 resume=true 才解除。 */
+  private playHeld = false;
+  /** 只表示当前有一条未过期 stop 写入记录；是否被游戏确认另看 playStopAcked。 */
+  private playStopWritten = false;
+  private playStopSeq = 0;
+  private playStopExpireAt = 0;
+  private playStopAcked = false;
+  /** clear(pz-judge) 的代次；旧回执不得越过 clear 写回。 */
+  private judgeGeneration = 0;
+  private readonly attemptTombstones = new Map<number, AttemptTombstone>();
+  private readonly lastJudgeCommitAttempts = new Map<string, number>();
+  /** 延迟/在途事件的未提交状态与频控额度追踪，仅在真实 delivered 后落盘或消费。 */
+  private inflightTv: { session: string; day: number; senderKey: string; attempt: number } | null = null;
+  private inflightNudge: { session: string; senderKey: string; attempt: number } | null = null;
+  private pendingDeferredCommits = new Map<string, PendingJudgeCommit>();
+  private pendingQuota = new Map<string, PendingQuota>();
 
   constructor(opts: PzWorldOptions) {
     this.opts = opts;
     this.journal = new Journal(opts.dataDir);
     this.judgeFile = join(opts.dataDir, 'pz-judge.json');
+    this.playHeldFile = join(opts.dataDir, 'pz-play-held.json');
+    this.playHeldBackupFile = join(opts.dataDir, 'pz-play-held.backup.json');
     this.sit = buildSituation(null, {
       nowMs: (opts.now?.() ?? new Date()).getTime(),
       staleSeconds: opts.cfg.staleSeconds,
     });
     this.loadJudgeState();
+    this.loadPlayHeld();
   }
 
   private get cfg(): PzConfigSection { return this.opts.cfg; }
@@ -375,9 +443,7 @@ export class PzWorld implements World {
   async start(host: WorldHost): Promise<void> {
     this.host = host;
     this.log = host.log;
-    this.vocabNote = readVocab(this.hostRoot(), this.companionDir()).note;
     this.log.info(`僵毁陪玩已启动 v${VERSION}`);
-    if (this.vocabNote) this.log.warn(`桌宠词表：${this.vocabNote}`);
 
     this.startedAt = this.now().getTime();
     await this.tick();
@@ -388,9 +454,79 @@ export class PzWorld implements World {
 
   async stop(): Promise<void> {
     if (this.timer) clearInterval(this.timer);
+    if (this.playHeldDirty) this.savePlayHeld();
     this.timer = null;
     this.host = null;
     this.log = null;
+    this.judgeGeneration += 1;
+    this.inflightTv = null;
+    this.inflightNudge = null;
+    this.pendingDeferredCommits.clear();
+    this.pendingQuota.clear();
+    this.attemptTombstones.clear();
+    this.lastJudgeCommitAttempts.clear();
+  }
+
+  onEventsSettled(events: readonly EventEnvelope[], outcome: 'delivered' | 'discarded'): void {
+    for (const ev of events) {
+      const key = ev.senderKey;
+      if (!key) continue;
+      const meta = ev.meta as { pzJudgeGeneration?: unknown; pzAttempt?: unknown } | undefined;
+      const generation = meta?.pzJudgeGeneration;
+      const attempt = meta?.pzAttempt;
+      // 三个身份维度缺一不可；旧宿主剥掉 meta 时宁可不结算，也绝不误结新 attempt。
+      if (generation !== this.judgeGeneration || typeof attempt !== 'number' || !Number.isInteger(attempt)) continue;
+      const q = this.pendingQuota.get(key);
+      if (q?.attempt === attempt && q.generation === generation) {
+        if (!q.deferred && (q.cursor === null || ev.cursor !== q.cursor)) continue;
+        if (outcome === 'delivered') this.commitPending(key, attempt, ev.cursor);
+        else this.cancelPending(key, attempt);
+        continue;
+      }
+      const tomb = this.attemptTombstones.get(attempt);
+      if (!tomb || tomb.senderKey !== key || tomb.generation !== generation || tomb.outcome !== 'released') continue;
+      if (tomb.quota && !tomb.quota.deferred && (tomb.cursor === null || ev.cursor !== tomb.cursor)) continue;
+      if (tomb.cursor !== null && ev.cursor !== tomb.cursor) continue;
+      if (outcome === 'discarded') {
+        this.rememberAttempt({ ...tomb, outcome: 'discarded', cursor: ev.cursor, quota: null, commit: null });
+      } else {
+        // 租约释放只释放闩锁，不伪造 discarded。事件若后来真的 delivered，原 attempt 补记一次。
+        this.finalizeReleasedDelivery(tomb, ev.cursor);
+      }
+    }
+  }
+
+  /**
+   * 交接结束钩子：同步搭车入队一条当前局内/连接状态快照（piggyback + snapshot），
+   * 在投递当下的 render() 中实时检查 link === 'ok' / 'stale' 并生成最新局内数据。
+   */
+  onHandoffEnded(): void {
+    if (!this.host) return;
+    // 旧前缀里的 deferred 可能永远不再结算；交接边界主动释放，但不提交任何额度或水位。
+    for (const [key, q] of [...this.pendingQuota]) {
+      if (q.deferred) this.releasePending(key, q.attempt);
+    }
+    for (const key of [...this.pendingDeferredCommits.keys()]) this.cancelPending(key);
+    const renderHandoff = (): string => {
+      if (this.sit.link === 'ok' && this.sit.inGame) {
+        return `[交接恢复局内快照] 第 ${this.sit.day ?? '?'} 天 ${this.sit.clockText ?? ''} · ${this.sit.placeText} · 血量 ${this.sit.hp ?? '?'}% · 视野僵尸 ${this.sit.visible ?? '?'} 只。`;
+      }
+      if (this.sit.link === 'stale' && this.sit.inGame) {
+        return `[交接恢复状态快照] 数据已停更（${this.sit.linkNote}；停更前：第 ${this.sit.day ?? '?'} 天 ${this.sit.clockText ?? ''} · ${this.sit.placeText}）。`;
+      }
+      return `[交接恢复状态快照] 未进入存档（${this.sit.linkNote}）。`;
+    };
+    void this.push({
+      type: 'pz.handoff',
+      key: `pz.handoff:${this.now().getTime().toString(36)}`,
+      trigger: 'flush',
+      urgent: false,
+      text: renderHandoff(),
+    }, {
+      triggerOverride: 'piggyback',
+      tags: ['snapshot'],
+      deferredRender: renderHandoff,
+    });
   }
 
   /* ---------------- 主循环 ---------------- */
@@ -429,6 +565,9 @@ export class PzWorld implements World {
     if (!this.host) return;
     const now = this.now();
     const nowMs = now.getTime();
+    this.recoverRenderedDeferred(nowMs);
+    this.pruneExpiredImmediateQuotas(nowMs);
+    if (this.playHeldDirty) this.savePlayHeld();
 
     // 热改间隔：重建 timer，否则「轮询间隔」这个配置项就只是存了个数。
     const wantMs = Math.max(500, this.cfg.pollMs);
@@ -571,17 +710,7 @@ export class PzWorld implements World {
     }
 
     const ch = chattinessOf(this.cfg.chattiness);
-    // 「独占全屏」那一条不算清单：它是环境提示，提一次就够，不该被轮播。
-    const guide = guideOf(this.sit);
-    const tips = [
-      // 新手期先念「下一步」——比反复提醒「你没水」有用，因为它带做法。
-      guide.fresh && guide.next ? `${guide.next.label}。${guide.next.how}` : '',
-      // 电视课是有时限的（停电就没了），所以排在通用清单前面。
-      describeTv(this.sit) ?? '',
-      ...tipsOf(this.sit, { exclusiveFullscreen: this.watch?.exclusiveFullscreen })
-        .filter((t) => t.key !== 'fullscreen')
-        .map((t) => t.text),
-    ].filter(Boolean);
+    const tips = this.currentTips();
 
     // **数据不新鲜就不判。**
     //
@@ -593,6 +722,7 @@ export class PzWorld implements World {
     //
     // `link !== 'ok'` 覆盖：数据陈旧、没在读档、找不到目录、读不出来。这四种都不该判。
     if (this.sit.link === 'ok') {
+      const prevState = this.judgeState;
       const result = judge(this.judgeState, this.sit, this.raw, {
         chattiness: ch,
         speakDanger: this.cfg.speakDanger,
@@ -604,9 +734,37 @@ export class PzWorld implements World {
         tips,
         nudgeEveryMs: nudgeEveryMs(this.cfg.nudgeMinutes, ch),
       });
-      this.judgeState = result.next;
+      for (const [key, commit] of [...this.pendingDeferredCommits]) {
+        if (commit.session !== result.next.session) this.cancelPending(key);
+      }
+      if (this.inflightTv && this.inflightTv.session !== result.next.session) this.inflightTv = null;
+      if (this.inflightNudge && this.inflightNudge.session !== result.next.session) this.inflightNudge = null;
+      const hasTv = result.out.some((e) => e.type === 'pz.tv');
+      const hasNudge = result.out.some((e) => e.type === 'pz.nudge');
+      this.judgeState = {
+        ...result.next,
+        ...(hasTv ? { tvDay: prevState.tvDay } : {}),
+        ...(hasNudge ? {
+          nudgeAtMs: prevState.nudgeAtMs,
+          nudgeIndex: prevState.nudgeIndex,
+          nudgeRecent: prevState.nudgeRecent,
+        } : {}),
+      };
       this.saveJudgeState();
-      for (const ev of result.out) await this.emit(ev);
+      for (const ev of result.out) {
+        if (ev.type === 'pz.tv' && this.inflightTv && this.inflightTv.session === result.next.session && this.inflightTv.day === result.next.tvDay) {
+          continue;
+        }
+        if (ev.type === 'pz.nudge' && this.inflightNudge && this.inflightNudge.session === result.next.session) {
+          continue;
+        }
+        const commit = ev.type === 'pz.tv'
+          ? { session: result.next.session, tvDay: result.next.tvDay }
+          : ev.type === 'pz.nudge'
+            ? { session: result.next.session, nudge: { atMs: result.next.nudgeAtMs, index: result.next.nudgeIndex, recent: [...result.next.nudgeRecent] } }
+            : undefined;
+        await this.emit(ev, commit);
+      }
     }
 
     // 她自己的那一拍：该决定就推一次，该踩刹车就踩。
@@ -754,15 +912,26 @@ export class PzWorld implements World {
    * 写一条指令进文件。**所有**动作都从这儿走（包括 `scan`）——
    * 授权检查、校验、seq、写文件只有这一份，散成两处迟早有一处漏掉授权。
    */
-  private writeCmd(c: PlayCommand): { ok: boolean; msg: string; seq: number } {
+  private writeCmd(
+    c: PlayCommand,
+    opts?: { allowHeldStop?: boolean },
+  ): { ok: boolean; msg: string; seq: number } {
     const paths = this.paths;
     if (!paths) return { ok: false, msg: '还没找到游戏目录，指令写不进去。', seq: 0 };
     if (!this.cfg.allowPlay) {
       return {
         ok: false,
         seq: 0,
-        msg: '「让她自己动手玩」这个开关是关的 —— 我没有操作角色的权限。'
-          + '要动的话，让他去设置里把这一项打开。**别自己改配置，也别绕过它。**',
+        msg: '实验性自主操作默认关闭（设置页不提供该开关），我没有操作角色的权限。'
+          + '如需启用，须由他手动在配置文件里把 worlds.pz.allowPlay 设为 true。**别自己改配置，也别绕过它。**',
+      };
+    }
+    // 所有桥接写入（包括 pz_recipes 的 scan）都过这一道闩锁，调用方不得各自绕过。
+    if (this.playHeld && !opts?.allowHeldStop) {
+      return {
+        ok: false,
+        seq: 0,
+        msg: '口头暂停闩锁生效中，已拒绝写入桥接指令（包括 scan）。只有玩家明确重新授权并传 resume=true 才能解除。',
       };
     }
     const bad = validateCommand(c);
@@ -795,9 +964,88 @@ export class PzWorld implements World {
     return { ok: true, msg: line, seq };
   }
 
-  private sendPlay(c: PlayCommand): string {
-    const w = this.writeCmd(c);
+  private refreshPlayStop(): void {
+    if (!this.playStopWritten || this.playStopAcked) return;
+    const ack = (this.raw?.cmd ?? null) as PlayAck | null;
+    if (ack?.seq === this.playStopSeq && ack.verb === 'stop') {
+      if (ack.ok) this.playStopAcked = true;
+      else this.playStopWritten = false;
+      return;
+    }
+    // 没有成功 ack 且原指令已过 TTL，就不能再拿“已写入”冒充“仍待执行”；允许重复 hold 补写。
+    if (this.now().getTime() >= this.playStopExpireAt) this.playStopWritten = false;
+  }
+
+  private handlePlayTool(args: unknown): string {
+    if (!this.cfg.allowPlay) {
+      return this.sendPlay((args ?? {}) as PlayCommand);
+    }
+    const raw = (args ?? {}) as Record<string, unknown>;
+    const holdReq = raw.hold === true;
+    const resumeReq = raw.resume === true;
+    const { hold: _hold, resume: _resume, ...rest } = raw;
+    const cleanCmd = rest as unknown as PlayCommand;
+
+    if (holdReq) {
+      this.refreshPlayStop();
+      if (this.playHeld && this.playStopWritten) {
+        const stopState = this.playStopAcked
+          ? `游戏已回执 stop（seq=${this.playStopSeq}）；扩展门禁仍在生效。`
+          : 'stop 已写入桥接文件且仍在 TTL 内，但尚无成功回执，不能据此宣称控制权已经交还；扩展门禁仍在生效。';
+        return `当前已处于口头暂停状态；${stopState}`
+          + '未经明确口头重新授权（resume=true）不得继续操作。';
+      }
+      // 闩锁与 stop 送达是两件事：先持久化拒动，再尝试 stop；失败也绝不自行撤闩。
+      this.playHeld = true;
+      this.playStopWritten = false;
+      this.playStopSeq = 0;
+      this.playStopExpireAt = 0;
+      this.playStopAcked = false;
+      this.wasBusy = false;
+      const persisted = this.savePlayHeld();
+      const persistText = persisted === 'clean'
+        ? '口头撤权闩锁已原子写入主副本与恢复副本。'
+        : persisted === 'degraded'
+          ? '口头撤权闩锁至少已写入一份恢复记录，另一份失败并标记 dirty 待重试；不宣称能覆盖所有磁盘故障。'
+          : '口头撤权闩锁已在当前进程生效，但两份落盘均失败；重启后可能解锁，不能宣称持久恢复已保证。';
+      const stopOut = this.sendPlay({ verb: 'stop' }, { allowHeldStop: true });
+      if (this.playStopWritten) {
+        return `${stopOut}\n\n[口头撤权已锁定] ${persistText}`
+          + 'stop 已写入桥接文件，尚待游戏执行；扩展自身已拒动，但不宣称游戏已经执行 stop 或控制权已经交还。';
+      }
+      return `${stopOut}\n\n[口头撤权已锁定] ${persistText}`
+        + '但本次 stop 未成功写入，不能宣称已交出控制权。闩锁仍保持；重复 hold=true 会补试 stop。';
+    }
+
+    if (this.playHeld && !resumeReq) {
+      return '当前处于口头暂停状态；在玩家明确口头重新授权并传 resume=true 前，严禁恢复自主动作。本次指令已拒绝。';
+    }
+
+    if (resumeReq) {
+      this.playHeld = false;
+      this.playStopWritten = false;
+      this.playStopSeq = 0;
+      this.playStopExpireAt = 0;
+      this.playStopAcked = false;
+      const persisted = this.savePlayHeld();
+      const out = this.sendPlay(cleanCmd);
+      return persisted === 'clean'
+        ? out
+        : `${out}\n解除闩锁落盘${persisted === 'degraded' ? '不完整，已标记 dirty 待重试' : '失败'}；本进程已按显式 resume 恢复，但重启后可能仍恢复为暂停。`;
+    }
+
+    return this.sendPlay(cleanCmd);
+  }
+
+  private sendPlay(c: PlayCommand, opts?: { allowHeldStop?: boolean }): string {
+    const w = this.writeCmd(c, opts);
     if (!w.ok) return w.msg;
+    if (opts?.allowHeldStop) {
+      this.playStopWritten = true;
+      this.playStopSeq = w.seq;
+      this.playStopExpireAt = this.now().getTime() + DEFAULT_TTL_SECONDS * 1000;
+      this.playStopAcked = false;
+    }
     const seq = w.seq;
     const line = w.msg;
 
@@ -874,6 +1122,11 @@ export class PzWorld implements World {
     //
     // 她的判断是对的，错的是这条推送：**知道对方没在听还继续说，比不说更糟。**
     if (this.sit.link !== 'ok') {
+      this.wasBusy = false;
+      return;
+    }
+
+    if (this.playHeld) {
       this.wasBusy = false;
       return;
     }
@@ -974,22 +1227,165 @@ export class PzWorld implements World {
     });
   }
 
-  private async emit(ev: Outgoing): Promise<void> {
-    const nowMs = this.now().getTime();
+  private pruneExpiredImmediateQuotas(nowMs: number): void {
+    for (const [key, q] of [...this.pendingQuota]) {
+      if (!q.deferred && nowMs - q.atMs > 180_000) this.releasePending(key, q.attempt);
+    }
+  }
 
-    // 两类东西走两套额度，以前混在一起算，结果是谁都能把另一边的额度吃掉。
-    //
-    //   **说话**（`pz.loot` / `pz.danger` / 电视 / 提示…）—— 3 分钟 3 条，间隔 25 秒。
-    //   真机反馈过两次「她说话的频率好高」。第一次收到 3/5/8 秒，实测还是平均半分钟
-    //   一句 —— 因为那是我们这一路的口径，而桌宠上还有别的扩展（音乐、桌面）在推，
-    //   两股叠起来就是十几秒一句。这里再收到 3 分钟 3 条：
-    //   宁可让她错过一桶垃圾，也别让她在你打游戏时一直说话。
-    //
-    //   **决策提示**（`pz.play`，「轮到你决定了」）—— 一分钟 20 条，间隔 1 秒。
-    //   这条是让她动手的，不是说话。它自己要跟着 `playEverySec` 的节奏走，
-    //   被说话的额度卡住就变成「她不做事」，那是另一个 bug。
-    //
-    // urgent 一律绕过去 —— 会死人的事不该排队。
+  /** 未 render 与 render 后分开计租约；释放不删除原账，迟到 delivered 仍能幂等补结算。 */
+  private recoverRenderedDeferred(nowMs: number): void {
+    for (const [key, q] of [...this.pendingQuota]) {
+      if (!q.deferred) continue;
+      const expired = q.renderedAt === null
+        ? nowMs - q.atMs >= DEFERRED_QUEUE_LEASE_MS
+        : nowMs - q.renderedAt >= DEFERRED_RENDERED_LEASE_MS;
+      if (expired) this.releasePending(key, q.attempt);
+    }
+  }
+
+  private rememberAttempt(tomb: AttemptTombstone): void {
+    this.attemptTombstones.delete(tomb.attempt);
+    this.attemptTombstones.set(tomb.attempt, tomb);
+    while (this.attemptTombstones.size > ATTEMPT_TOMBSTONE_LIMIT) {
+      const oldest = this.attemptTombstones.keys().next().value as number | undefined;
+      if (oldest === undefined) break;
+      this.attemptTombstones.delete(oldest);
+    }
+  }
+
+  private applyJudgeCommit(c: PendingJudgeCommit): void {
+    if (c.generation !== this.judgeGeneration || c.session !== this.judgeState.session) return;
+    let changed = false;
+    if (c.tvDay !== undefined && c.tvDay > this.judgeState.tvDay) {
+      this.judgeState = { ...this.judgeState, tvDay: c.tvDay };
+      changed = true;
+    }
+    if (c.nudge) {
+      this.judgeState = {
+        ...this.judgeState,
+        nudgeAtMs: c.nudge.atMs,
+        nudgeIndex: c.nudge.index,
+        nudgeRecent: [...c.nudge.recent],
+      };
+      changed = true;
+    }
+    if (changed) this.saveJudgeState();
+  }
+
+  private applyAttemptJudgeCommit(senderKey: string, commit: PendingJudgeCommit | null): void {
+    if (!commit || commit.generation !== this.judgeGeneration || commit.session !== this.judgeState.session) return;
+    const previous = this.lastJudgeCommitAttempts.get(senderKey) ?? -1;
+    // A/B 反序回执时，较老 A 的 nudge 快照不得覆盖已经交付的较新 B。
+    if (commit.attempt < previous) return;
+    this.lastJudgeCommitAttempts.delete(senderKey);
+    this.lastJudgeCommitAttempts.set(senderKey, commit.attempt);
+    while (this.lastJudgeCommitAttempts.size > ATTEMPT_TOMBSTONE_LIMIT) {
+      const oldest = this.lastJudgeCommitAttempts.keys().next().value as string | undefined;
+      if (oldest === undefined) break;
+      this.lastJudgeCommitAttempts.delete(oldest);
+    }
+    this.applyJudgeCommit(commit);
+  }
+
+  private clearActiveAttempt(senderKey: string, attempt: number): PendingJudgeCommit | null {
+    const q = this.pendingQuota.get(senderKey);
+    if (q?.attempt === attempt) this.pendingQuota.delete(senderKey);
+    const commit = this.pendingDeferredCommits.get(senderKey) ?? null;
+    if (commit?.attempt === attempt) this.pendingDeferredCommits.delete(senderKey);
+    if (this.inflightTv?.senderKey === senderKey && this.inflightTv.attempt === attempt) this.inflightTv = null;
+    if (this.inflightNudge?.senderKey === senderKey && this.inflightNudge.attempt === attempt) this.inflightNudge = null;
+    return commit?.attempt === attempt ? commit : null;
+  }
+
+  private commitQuota(q: PendingQuota): void {
+    if (q.counted) {
+      if (q.kind === 'speech') {
+        if (q.windowStart > this.windowStart) {
+          this.windowStart = q.windowStart;
+          this.pushedInWindow = 0;
+        }
+        if (q.windowStart === this.windowStart) this.pushedInWindow += 1;
+        if (q.atMs > this.lastPushedAt) this.lastPushedAt = q.atMs;
+      } else {
+        if (q.speechStart > this.speechStart) {
+          this.speechStart = q.speechStart;
+          this.speechInWindow = 0;
+        }
+        if (q.speechStart === this.speechStart) this.speechInWindow += 1;
+        if (q.atMs > this.lastSpeechAt) this.lastSpeechAt = q.atMs;
+      }
+    }
+    if (q.urgent && q.atMs > this.lastUrgentAt) this.lastUrgentAt = q.atMs;
+  }
+
+  private commitPending(
+    senderKey: string,
+    attempt: number,
+    cursor?: number,
+    opts?: { assumeSaved?: boolean },
+  ): void {
+    const q = this.pendingQuota.get(senderKey);
+    if (!q || q.attempt !== attempt || q.generation !== this.judgeGeneration) return;
+    // 旧宿主没有 settled 流水线，pushEvent 成功就算交付；它可能根本不回 cursor，
+    // 这时不能拿「cursor 未知」当丢弃，否则额度与水位永远不结算、同一条反复提醒。
+    if (!q.deferred && !opts?.assumeSaved && (q.cursor === null || cursor !== q.cursor)) return;
+    if (q.deferred && cursor !== undefined) q.cursor = cursor;
+    const commit = this.clearActiveAttempt(senderKey, attempt);
+    this.commitQuota(q);
+    this.applyAttemptJudgeCommit(senderKey, commit);
+    this.rememberAttempt({
+      senderKey, generation: q.generation, attempt, outcome: 'delivered',
+      cursor: q.cursor, quota: null, commit: null,
+    });
+  }
+
+  private finalizeReleasedDelivery(tomb: AttemptTombstone, cursor: number): void {
+    if (tomb.outcome !== 'released') return;
+    if (tomb.quota) this.commitQuota(tomb.quota);
+    this.applyAttemptJudgeCommit(tomb.senderKey, tomb.commit);
+    this.rememberAttempt({
+      senderKey: tomb.senderKey, generation: tomb.generation, attempt: tomb.attempt,
+      outcome: 'delivered', cursor, quota: null, commit: null,
+    });
+  }
+
+  /** 租约到期或被同键新 attempt 取代；真实 delivered 若迟到，仍按这份旧账补记一次。 */
+  private releasePending(senderKey: string, attempt: number): void {
+    const q = this.pendingQuota.get(senderKey);
+    if (!q || q.attempt !== attempt) return;
+    const commit = this.clearActiveAttempt(senderKey, attempt);
+    this.rememberAttempt({
+      senderKey, generation: q.generation, attempt, outcome: 'released',
+      cursor: q.cursor, quota: q, commit,
+    });
+  }
+
+  /** 已知未投递（render null、push 失败或 discarded）才丢弃旧账；attempt 防止误删同键新项。 */
+  private cancelPending(senderKey: string, attempt?: number): void {
+    const q = this.pendingQuota.get(senderKey);
+    if (q && attempt !== undefined && q.attempt !== attempt) return;
+    const targetAttempt = attempt ?? q?.attempt ?? this.pendingDeferredCommits.get(senderKey)?.attempt;
+    if (targetAttempt === undefined) return;
+    const commit = this.clearActiveAttempt(senderKey, targetAttempt);
+    this.rememberAttempt({
+      senderKey, generation: q?.generation ?? commit?.generation ?? this.judgeGeneration,
+      attempt: targetAttempt, outcome: 'discarded', cursor: q?.cursor ?? null, quota: null, commit: null,
+    });
+  }
+
+  private async emit(
+    ev: Outgoing,
+    judgeCommit?: {
+      session: string;
+      tvDay?: number;
+      nudge?: { atMs: number; index: number; recent: string[] };
+    },
+  ): Promise<void> {
+    const nowMs = this.now().getTime();
+    this.pruneExpiredImmediateQuotas(nowMs);
+    this.recoverRenderedDeferred(nowMs);
+
     const isSpeech = ev.type !== 'pz.play';
     if (nowMs - this.windowStart > 180_000) {
       this.windowStart = nowMs;
@@ -1000,43 +1396,168 @@ export class PzWorld implements World {
       this.speechInWindow = 0;
     }
 
-    // 紧急事件之后压住一切常规事件。
-    //
-    // 真机上看到过这一幕：21:43:22 她喊「三只贴到半格」，五秒后就开始聊
-    // 柴可夫斯基第三乐章 —— 不是她分心，是我们把两件事并列推给了她。
-    // 危险之后那二十秒里，她的注意力该留在危险上。
-    if (ev.urgent) this.lastUrgentAt = nowMs;
+    // 在途占位参与闸门判断，但只读地形成 effective 值；真实计数和时间戳仅 delivered 后推进。
+    let effectivePushedInWindow = this.pushedInWindow;
+    let effectiveSpeechInWindow = this.speechInWindow;
+    let effectivePushedAt = this.lastPushedAt;
+    let effectiveSpeechAt = this.lastSpeechAt;
+    let effectiveUrgentAt = this.lastUrgentAt;
+    for (const q of this.pendingQuota.values()) {
+      if (q.urgent && q.atMs > effectiveUrgentAt) effectiveUrgentAt = q.atMs;
+      if (!q.counted) continue;
+      if (q.kind === 'speech') {
+        if (q.windowStart === this.windowStart) effectivePushedInWindow += 1;
+        if (q.atMs > effectivePushedAt) effectivePushedAt = q.atMs;
+      } else {
+        if (q.speechStart === this.speechStart) effectiveSpeechInWindow += 1;
+        if (q.atMs > effectiveSpeechAt) effectiveSpeechAt = q.atMs;
+      }
+    }
 
     if (!ev.urgent) {
       if (isSpeech) {
-        if (nowMs - this.lastUrgentAt < 20_000) return;
-        if (this.pushedInWindow >= 3) return;
-        if (nowMs - this.lastPushedAt < 25_000) return;
-        this.pushedInWindow += 1;
-        this.lastPushedAt = nowMs;
+        if (nowMs - effectiveUrgentAt < 20_000) return;
+        if (effectivePushedInWindow >= 3) return;
+        if (nowMs - effectivePushedAt < 25_000) return;
       } else {
-        if (this.speechInWindow >= 20) return;
-        if (nowMs - this.lastSpeechAt < 1000) return;
-        this.speechInWindow += 1;
-        this.lastSpeechAt = nowMs;
+        if (effectiveSpeechInWindow >= 20) return;
+        if (nowMs - effectiveSpeechAt < 1000) return;
       }
     }
-    await this.push(ev);
+
+    const DEFERRED_TYPES = new Set(['pz.nudge', 'pz.tv']);
+    const isDeferredCandidate = !ev.urgent && DEFERRED_TYPES.has(ev.type);
+    const previousAttempt = this.pendingQuota.get(ev.key)?.attempt;
+    if (previousAttempt !== undefined) this.releasePending(ev.key, previousAttempt);
+    const attempt = ++eventAttemptSeq;
+    const useDeferred = isDeferredCandidate && this.host !== null && this.canPushDeferred(this.host);
+    this.pendingQuota.set(ev.key, {
+      generation: this.judgeGeneration,
+      attempt,
+      kind: isSpeech ? 'speech' : 'play',
+      urgent: ev.urgent,
+      counted: !ev.urgent,
+      windowStart: this.windowStart,
+      speechStart: this.speechStart,
+      atMs: nowMs,
+      deferred: useDeferred,
+      renderedAt: null,
+      cursor: null,
+    });
+
+    if (ev.type === 'pz.session.start') {
+      const startHint = '\n[开局按需速查] 查明细与新手指引调 `pz_tips`；查当前可制作配方调 `pz_recipes`；动手执行前确保 `allowPlay=true` 且 `hands.on=false`，一次只下少量有序指令并在 `busy` 结束后查 `pz_state`。';
+      const sent = await this.push({ ...ev, text: `${ev.text}${startHint}` }, { tags: ['snapshot'], attempt });
+      if (sent === 'not-sent') this.cancelPending(ev.key, attempt);
+      return;
+    }
+    // 一次性历史事实走即时 pushEvent；状态提醒走 deferred。现代宿主两种入队都不是 delivered，
+    // tvDay/nudge 进度、额度与最小间隔统一等 onEventsSettled；旧宿主 fallback 的明确降级见 push()。
+    if (isDeferredCandidate) {
+      if (judgeCommit) {
+        if (judgeCommit.tvDay !== undefined) {
+          this.inflightTv = { session: judgeCommit.session, day: judgeCommit.tvDay, senderKey: ev.key, attempt };
+        }
+        if (judgeCommit.nudge) {
+          this.inflightNudge = { session: judgeCommit.session, senderKey: ev.key, attempt };
+        }
+        this.pendingDeferredCommits.set(ev.key, {
+          ...judgeCommit,
+          generation: this.judgeGeneration,
+          attempt,
+        });
+      }
+      const expectedSession = this.sit.session;
+      const res = await this.push(ev, {
+        tags: ['snapshot'],
+        attempt,
+        deferredRender: () => {
+          if (this.sit.link !== 'ok' || !this.sit.inGame || this.sit.session !== expectedSession) {
+            this.cancelPending(ev.key, attempt);
+            return null;
+          }
+          if (ev.type === 'pz.tv') {
+            const tvOut = formatTvText(this.sit);
+            if (!tvOut) this.cancelPending(ev.key, attempt);
+            return tvOut;
+          }
+          if (ev.nudgeMeta?.tip && !this.currentTips().includes(ev.nudgeMeta.tip)) {
+            this.cancelPending(ev.key, attempt);
+            return null;
+          }
+          const tip = ev.nudgeMeta?.tip ?? ev.text;
+          return formatNudgeText(this.sit, tip, ev.nudgeMeta?.before ?? []);
+        },
+      });
+      if (res === 'not-sent') this.cancelPending(ev.key, attempt);
+      return;
+    }
+    const sent = await this.push(ev, { attempt });
+    if (sent === 'not-sent') this.cancelPending(ev.key, attempt);
   }
 
-  private async push(ev: Outgoing): Promise<void> {
+  private canPushDeferred(host: WorldHost): boolean {
+    return typeof host.pushDeferred === 'function' && host.pushDeferred.length > 0;
+  }
+
+  private async push(
+    ev: Outgoing,
+    opts?: { triggerOverride?: TriggerMode; tags?: EventTag[]; deferredRender?: () => string | null; attempt?: number },
+  ): Promise<'deferred' | 'queued' | 'not-sent'> {
     const host = this.host;
-    if (!host) return;
+    if (!host) return 'not-sent';
+    const trigger: TriggerMode = opts?.triggerOverride ?? ev.trigger;
+    const attempt = opts?.attempt ?? ++eventAttemptSeq;
+    const active = this.pendingQuota.get(ev.key);
+    const generation = active?.attempt === attempt ? active.generation : this.judgeGeneration;
+    const meta = { pzJudgeGeneration: generation, pzAttempt: attempt };
+    const markRendered = (): void => {
+      const q = this.pendingQuota.get(ev.key);
+      // 旧 A 的迟到 render 不得推进同键 B 的 renderedAt。
+      if (q?.deferred && q.attempt === attempt && q.generation === generation) {
+        q.renderedAt = this.now().getTime();
+      }
+    };
     try {
-      await host.pushEvent({
+      if (opts?.deferredRender && this.canPushDeferred(host)) {
+        const renderFn = opts.deferredRender;
+        host.pushDeferred({
+          type: ev.type,
+          senderKey: ev.key,
+          meta,
+          ...(opts.tags?.length ? { tags: opts.tags } : {}),
+          render: () => {
+            markRendered();
+            const out = renderFn();
+            return out ? { text: out } : null;
+          },
+        }, { trigger });
+        return 'deferred';
+      }
+      const finalText = opts?.deferredRender ? opts.deferredRender() : ev.text;
+      if (!finalText) return 'not-sent';
+      const envelope = await host.pushEvent({
         type: ev.type,
         source: this.id,
         senderKey: ev.key,
+        meta,
         ts: this.now().toISOString(),
-        text: ev.text,
-      }, { trigger: ev.trigger });
+        text: finalText,
+        ...(opts?.tags?.length ? { tags: opts.tags } : {}),
+      }, { trigger });
+      const q = this.pendingQuota.get(ev.key);
+      if (q?.attempt === attempt && q.generation === generation) {
+        q.cursor = typeof envelope?.cursor === 'number' ? envelope.cursor : null;
+        // 明确降级仅限没有现代 deferred/settled 流水线的旧宿主：成功保存即假定 delivered。
+        // 现代宿主的即时事件仍必须等 onEventsSettled，pushEvent resolve 本身不算交付。
+        if (!this.canPushDeferred(host)) {
+          this.commitPending(ev.key, attempt, q.cursor ?? undefined, { assumeSaved: true });
+        }
+      }
+      return 'queued';
     } catch (err) {
       this.log?.warn(`推事件失败（${ev.type}）：${(err as Error).message}`);
+      return 'not-sent';
     }
   }
 
@@ -1081,7 +1602,7 @@ export class PzWorld implements World {
         description: TOOL_PLAY.description,
         parameters: TOOL_PLAY.parameters,
         tags: [...TOOL_PLAY.tags],
-        handler: async (args) => ({ text: this.sendPlay((args ?? {}) as PlayCommand) }),
+        handler: async (args) => ({ text: this.handlePlayTool(args) }),
       },
       {
         name: TOOL_JOURNAL.name,
@@ -1126,9 +1647,12 @@ export class PzWorld implements World {
         ? `**他在自己操作**（${this.sit.handsWhy || '有输入'}）—— 身体归他，别下指令，只看着`
         : '';
       lines.push(this.cfg.allowPlay
-        ? `操作：已授权 · ${this.raw?.busy ? '手里有活' : '闲着'}`
-          + ` · ${ack ? describeAck(ack) : '还没下过指令'}${rfText}`
-        : '操作：未授权（设置里「让她自己动手玩」是关的，只能看不能动）');
+        ? this.playHeld
+          ? `操作：口头暂停中（需用户明确重新授权并在 pz_play 传 resume=true）`
+            + ` · ${ack ? describeAck(ack) : '还没下过指令'}${rfText}`
+          : `操作：已授权 · ${this.raw?.busy ? '手里有活' : '闲着'}`
+            + ` · ${ack ? describeAck(ack) : '还没下过指令'}${rfText}`
+        : '操作：未授权（默认只陪聊；实验性自主操作需手动在配置设 worlds.pz.allowPlay: true，设置页无开关）');
       if (hands) lines.push(hands);
     }
     lines.push(`桌宠置顶：${this.watch?.running ? this.liftState : '游戏没在跑，不用抬'}`);
@@ -1180,7 +1704,10 @@ export class PzWorld implements World {
           : '（没有别的可提醒的。）');
     }
     const body = tips.map((t) => `- ${t.text}`).join('\n');
-    return [head + guideLine, body].filter(Boolean).join('\n');
+    const quickGuide = this.sit.inGame
+      ? '\n- 常规原则：武器优先耐久高且趁手的（如砍刀/长武器/撬棍），TV 课在有电前五天调 Life and Living TV（203Hz）。'
+      : '';
+    return [head + guideLine, body + quickGuide].filter(Boolean).join('\n');
   }
 
   private journalText(args: { add?: string; section?: string; drop?: string }): string {
@@ -1205,22 +1732,29 @@ export class PzWorld implements World {
   /* ---------------- 提示词 ---------------- */
 
   envPromptVars(): Record<string, string> {
-    const vocab = readVocab(this.hostRoot(), this.companionDir());
-    const tips = tipsOf(this.sit, { exclusiveFullscreen: this.watch?.exclusiveFullscreen }).slice(0, 4).map((t) => `- ${t.text}`).join('\n');
+    const inGame = this.sit.inGame;
+    const tips = inGame
+      ? tipsOf(this.sit, { exclusiveFullscreen: this.watch?.exclusiveFullscreen }).slice(0, 3).map((t) => `- ${t.text}`).join('\n')
+      : '';
     const digest = this.journal.digest();
+    const journalSummary = !digest
+      ? '（陪玩日记为空；复盘时用 pz_journal 读写）'
+      : (inGame
+          ? digest.slice(0, 500)
+          : `（已有 ${digest.split('\n').filter((l) => l.trim().startsWith('-')).length} 条跨周目记录，需要时调用 pz_journal 读取）`);
 
     return {
       'pz.version': VERSION,
       'pz.status': this.statusLine(),
-      'pz.now': describeNow(this.sit),
+      'pz.now': inGame ? describeNow(this.sit) : `未开局（${this.sit.linkNote}）。`,
       'pz.tips': tips || '（按现在的状态没有必须马上处理的事）',
       'pz.persona': PERSONA_TEXT[personaOf(this.cfg.persona)] ?? PERSONA_TEXT.sharp,
-      'pz.marks': describeVocab(vocab),
-      'pz.journal': digest ? digest.slice(0, 700) : '（还是空的。第一档结束之后再写，别为了有内容临时编一条。）',
+      'pz.marks': MARKS_RULE,
+      'pz.journal': journalSummary,
       'pz.pace': {
-        quiet: '他选了「安静」：只有真会害死他的事才开口（危险、感染、入夜还在外面）。其余一概不说。',
-        normal: '他选了「正常」：上面那些，加上掉血和收获。别的一句话不多说。',
-        chatty: '他选了「话多」：可以顺口带一句别的，但也别把每件事都报一遍。',
+        quiet: '安静档：只在危险、感染或入夜等要紧事才开口，其余保持沉默。',
+        normal: '正常档：重要事件与显著消耗或收获时开口，不废话。',
+        chatty: '话多档：关键事实外可多聊几句，但仍避免报流水账。',
       }[chattinessOf(this.cfg.chattiness)],
     };
   }
@@ -1238,7 +1772,7 @@ export class PzWorld implements World {
     return {
       lamps: this.lamps(),
       panels: [
-        { id: 'main', title: '她此刻', description: '她看到的那些：第几天、几点、血、视野里的僵尸、手上和背包。' },
+        { id: 'main', title: '此刻局势', description: '游戏天数、时段、血量、视野僵尸与随身物品快照。' },
       ],
       invoke: async (panel, method) => {
         if (panel !== 'main') throw new Error(`未知面板：${panel}`);
@@ -1249,20 +1783,62 @@ export class PzWorld implements World {
       promptDocs: [{
         key: `worlds.${PZ_ID}.envPrompt`,
         title: '僵毁陪玩提示词',
-        description: '她怎么用这个扩展：看局面、该开口时开口、不装看得见屏幕。',
+        description: '如何使用陪玩观察状态、把握说话分寸与操作界限。',
         path: ENV_PROMPT_FILE,
         role: 'envPrompt',
         vars: [
           { name: 'pz.version', description: '扩展版本。' },
           { name: 'pz.status', description: '数据通道是否在跟。' },
-          { name: 'pz.now', description: '此刻的处境（每回合都刷新）。' },
-          { name: 'pz.tips', description: '按当前状态算出来的检查清单。' },
-          { name: 'pz.persona', description: '她这档口吻的说明。' },
-          { name: 'pz.marks', description: '当前立绘认识的表情与动作（现读）。' },
-          { name: 'pz.journal', description: '陪玩日记里已有的内容。' },
-          { name: 'pz.pace', description: '开口密度的说明。' },
+          { name: 'pz.now', description: '此刻处境（未开局时精简一行）。' },
+          { name: 'pz.tips', description: '当前紧急检查项。' },
+          { name: 'pz.persona', description: '提醒敏感度设定。' },
+          { name: 'pz.marks', description: '桌宠 pet_say 行内表情与动作 <...> 标记规范。' },
+          { name: 'pz.journal', description: '陪玩复盘日记摘要或条目计数。' },
+          { name: 'pz.pace', description: '开口密度设定。' },
         ],
       }],
+      storage: [
+        {
+          key: 'pz-journal',
+          label: '跨周目陪玩日记',
+          kind: 'disk',
+          location: this.journal.path(),
+          danger: true,
+          note: '不可逆删除跨局复盘 Markdown 笔记本。',
+          stat: () => {
+            const fp = this.journal.path();
+            if (!existsSync(fp)) return '未生成';
+            const lines = readFileSync(fp, 'utf8').split('\n').filter((l) => l.trim().startsWith('-')).length;
+            return `${lines} 条记录（${Math.max(1, Math.ceil(statSync(fp).size / 1024))} KB）`;
+          },
+          clear: () => {
+            const fp = this.journal.path();
+            if (existsSync(fp)) unlinkSync(fp);
+            return '已清除跨周目陪玩日记。';
+          },
+        },
+        {
+          key: 'pz-judge',
+          label: '事件水位与防重状态',
+          kind: 'disk',
+          location: this.judgeFile,
+          note: '清除后下次轮询将重置游标水位与今日去重记忆。',
+          stat: () => (existsSync(this.judgeFile) ? `${Math.max(1, Math.ceil(statSync(this.judgeFile).size / 1024))} KB` : '未生成'),
+          clear: () => {
+            // 全或无：unlink 失败时不得先改代次或在途表，调用方看到异常且所有内存状态保持原样。
+            if (existsSync(this.judgeFile)) unlinkSync(this.judgeFile);
+            this.judgeGeneration += 1;
+            this.inflightTv = null;
+            this.inflightNudge = null;
+            this.pendingDeferredCommits.clear();
+            this.pendingQuota.clear();
+            this.attemptTombstones.clear();
+            this.lastJudgeCommitAttempts.clear();
+            this.judgeState = initialJudgeState();
+            return '已清除事件水位缓存。';
+          },
+        },
+      ] satisfies StoragePart[],
     };
   }
 
@@ -1321,7 +1897,6 @@ export class PzWorld implements World {
   }
 
   private uiSnapshot(): unknown {
-    const vocab = readVocab(this.hostRoot(), this.companionDir());
     return {
       version: VERSION,
       persona: this.cfg.persona,
@@ -1374,8 +1949,8 @@ export class PzWorld implements World {
         }
         : null,
       root: this.paths?.root ?? '',
-      figure: vocab.figure,
-      vocabNote: vocab.note,
+      figure: null,
+      vocabNote: null,
       journal: this.journal.digest(),
     };
   }
@@ -1394,11 +1969,69 @@ export class PzWorld implements World {
     return findHostRoot(this.opts.dataDir);
   }
 
+  private currentTips(): string[] {
+    const guide = guideOf(this.sit);
+    return [
+      guide.fresh && guide.next ? `${guide.next.label}。${guide.next.how}` : '',
+      describeTv(this.sit) ?? '',
+      ...tipsOf(this.sit, { exclusiveFullscreen: this.watch?.exclusiveFullscreen })
+        .filter((t) => t.key !== 'fullscreen')
+        .map((t) => t.text),
+    ].filter(Boolean);
+  }
+
   private localDay(d: Date): string {
     const y = d.getFullYear();
     const m = String(d.getMonth() + 1).padStart(2, '0');
     const day = String(d.getDate()).padStart(2, '0');
     return `${y}-${m}-${day}`;
+  }
+
+  /** 口头撤权与 judge 水位分开存，清事件缓存也不能意外恢复游戏控制。 */
+  private loadPlayHeld(): void {
+    this.playStopWritten = false;
+    this.playStopSeq = 0;
+    this.playStopExpireAt = 0;
+    this.playStopAcked = false;
+    const read = (fp: string): 'missing' | 'invalid' | 'held' | 'free' => {
+      try {
+        const p = JSON.parse(readFileSync(fp, 'utf8')) as { held?: unknown };
+        if (p.held === true) return 'held';
+        if (p.held === false) return 'free';
+        return 'invalid';
+      } catch (err) {
+        return (err as NodeJS.ErrnoException).code === 'ENOENT' ? 'missing' : 'invalid';
+      }
+    };
+    const states = [read(this.playHeldFile), read(this.playHeldBackupFile)];
+    // 任一副本明确 held，或现存副本损坏/不可读，都保持拒动。
+    // 单份有效 free + 另一份缺失可兼容旧版本解锁，但会标 dirty 补齐冗余。
+    this.playHeld = states.includes('held') || states.includes('invalid');
+    const persisted = states.filter((s) => s === 'held' || s === 'free');
+    this.playHeldDirty = states.includes('invalid')
+      || persisted.length === 1
+      || (persisted.length === 2 && persisted[0] !== persisted[1]);
+  }
+
+  private writePlayHeldAtomic(fp: string): boolean {
+    const tmp = `${fp}.${process.pid}.${++this.playHeldTempSeq}.tmp`;
+    try {
+      writeFileSync(tmp, JSON.stringify({ held: this.playHeld }), 'utf8');
+      renameSync(tmp, fp);
+      return true;
+    } catch {
+      try { unlinkSync(tmp); } catch { /* 临时文件可能根本没建成 */ }
+      return false;
+    }
+  }
+
+  /** 两份独立原子写尽量抗单点失败；双写都失败时只能保证当前进程，绝不宣称重启也安全。 */
+  private savePlayHeld(): 'clean' | 'degraded' | 'failed' {
+    const primary = this.writePlayHeldAtomic(this.playHeldFile);
+    const backup = this.writePlayHeldAtomic(this.playHeldBackupFile);
+    this.playHeldDirty = !(primary && backup);
+    if (primary && backup) return 'clean';
+    return primary || backup ? 'degraded' : 'failed';
   }
 
   /** 水位和闸门落盘：重启不该让她把今天报过的再报一遍。 */
@@ -1437,7 +2070,7 @@ export function nudgeEveryMs(minutes: unknown, chattiness: 'quiet' | 'normal' | 
 export const PZ_DESCRIBE = {
   tools: TOOL_DECLS.map((t) => ({ ...t, tags: [...t.tags] })),
   events: [
-    { type: 'pz.session.start', description: { zh: '他进游戏了。', en: 'A save was loaded.' }, trigger: 'flush' as const },
+    { type: 'pz.session.start', description: { zh: '他进游戏了。', en: 'A save was loaded.' }, trigger: 'flush' as const, tags: ['snapshot'] as const },
     { type: 'pz.day.start', description: { zh: '游戏内换了一天。', en: 'A new in-game day started.' }, trigger: 'debounce' as const },
     { type: 'pz.dusk', description: { zh: '天在暗了（19 点后、还没入夜）。', en: 'Dusk: past 19:00 and not yet night.' }, trigger: 'flush' as const },
     { type: 'pz.night', description: { zh: '刚入夜。', en: 'Nightfall.' }, trigger: 'flush' as const },
@@ -1445,9 +2078,9 @@ export const PZ_DESCRIBE = {
     { type: 'pz.hurt', description: { zh: '掉血。', en: 'Took damage.' }, trigger: 'flush' as const },
     { type: 'pz.need', description: { zh: '他自己的状态跨了一档（饿、渴、累、体力、疼、惊恐、压力、心情、无聊）。', en: 'One of his own condition stats crossed a band.' }, trigger: 'flush' as const },
     { type: 'pz.weapon', description: { zh: '手上的武器耐久见底了。', en: 'The weapon in hand is nearly worn out.' }, trigger: 'flush' as const },
-    { type: 'pz.play', description: { zh: '轮到她决定下一步了（设置里开了「让她自己动手玩」）。', en: 'It is her turn to decide the next move; the play switch is on.' }, trigger: 'flush' as const },
+    { type: 'pz.play', description: { zh: '轮到决定下一步动作（需手动开启 worlds.pz.allowPlay 授权）。', en: 'It is your turn to decide the next move when play permission is enabled.' }, trigger: 'flush' as const },
     { type: 'pz.loot', description: { zh: '他正打开的那个容器里有值得停一下的东西（只看已经打开的那一个）。', en: 'The container he has open holds something worth pausing for. Only the one he opened.' }, trigger: 'flush' as const },
-    { type: 'pz.tv', description: { zh: '前期电视上有技能课（Life and Living TV），一天最多提一次，第 5 天之后不提。', en: 'A skill programme is on or about to start on Life and Living TV. Once a day, first five days only.' }, trigger: 'flush' as const },
+    { type: 'pz.tv', description: { zh: '前期电视上有技能课（Life and Living TV），一天最多提一次，第 5 天之后不提。', en: 'A skill programme is on or about to start on Life and Living TV. Once a day, first five days only.' }, trigger: 'flush' as const, tags: ['snapshot'] as const },
     { type: 'pz.infected', description: { zh: '被感染了。', en: 'Got infected.' }, trigger: 'flush' as const },
     { type: 'pz.death', description: { zh: '死了。', en: 'Died.' }, trigger: 'flush' as const },
     { type: 'pz.kill', description: { zh: '一小会儿里连杀了好几只。', en: 'Several kills in a short stretch.' }, trigger: 'debounce' as const },
@@ -1458,7 +2091,9 @@ export const PZ_DESCRIBE = {
         en: 'A checklist item is still open; a periodic nudge, reworded each time.',
       },
       trigger: 'flush' as const,
+      tags: ['snapshot'] as const,
     },
     { type: 'pz.setup', description: { zh: '这台机器的环境不对：找不到存档目录、mod 没装进去、或者一直没有数据。', en: 'Environment problem: no save dir, mod not installed, or no data at all.' }, trigger: 'flush' as const },
+    { type: 'pz.handoff', description: { zh: '用户交接（handoff）结束时顺路搭车（piggyback）补齐当前局内或连接状态的最新快照。', en: 'Piggybacked game or connection snapshot after user handoff ends.' }, trigger: 'piggyback' as const, tags: ['snapshot'] as const },
   ],
 };
