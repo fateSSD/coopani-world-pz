@@ -72,7 +72,7 @@ test('describe.json 与源码 PZ_DESCRIBE / tools() 单源完全同步且补齐 
       pkg.cortico.locales.zh.description,
       pkg.cortico.locales.en.description,
     ]) {
-      assert.match(description, /^Coopani 0\.2\.17\+ · /, '三处市场简介必须统一前置 Coopani 0.2.17+');
+      assert.match(description, /^Coopani 0\.2\.22\+ · /, '三处市场简介必须统一前置 Coopani 0.2.22+');
     }
     assert.match(pkg.description, /worlds\.pz\.allowPlay/);
     const readme = readFileSync(new URL('../README.md', import.meta.url), 'utf8');

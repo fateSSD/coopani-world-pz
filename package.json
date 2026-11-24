@@ -1,8 +1,8 @@
 {
   "name": "coopani-world-pz",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "type": "module",
-  "description": "Coopani 0.2.17+ · 僵毁陪玩（Windows）· 让桌宠陪你一起打《僵尸毁灭工程》：天黑催你回家、被尸群围住提醒你跑、翻到好武器替你高兴；默认只陪聊、设置页不提供自动操作开关，实验性自主操作仅供手动配置 worlds.pz.allowPlay: true 开启。",
+  "description": "Coopani 0.2.22+ · 僵毁陪玩（Windows）· 让桌宠陪你一起打《僵尸毁灭工程》：天黑催你回家、被尸群围住提醒你跑、翻到好武器替你高兴；默认只陪聊、设置页不提供自动操作开关，实验性自主操作仅供手动配置 worlds.pz.allowPlay: true 开启。反馈 QQ 群 284525159。",
   "author": {
     "name": "Mr.Q",
     "email": "623263325@qq.com",
@@ -46,11 +46,11 @@
     "locales": {
       "en": {
         "displayName": "Project Zomboid Companion",
-        "description": "Coopani 0.2.17+ · Bring a desktop teammate into Project Zomboid on Windows! She reads live game state directly—no screen capture, no spoilers.\n\n- **Always watching out for you**: reminds you when dusk is falling, warns when zombies close in, reacts when you get bitten or injured, and celebrates when you find a sledgehammer or generator in a container.\n- **Notices how you feel**: keeps an eye on your hunger, thirst, fatigue, panic, and weapon durability, plus reminds you about free Life and Living TV shows early on.\n- **Four personalities**: pick from snarky teammate, steady partner, jumpy underclassman, or serious-mode-only.\n- **Hands-off by default**: never touches your controls unless experimental auto-play is explicitly enabled in config (`worlds.pz.allowPlay: true`).\n- **Zero-hassle setup**: automatically places the CoopaniBridge Lua mod into Zomboid/mods/—just enable it once in-game."
+        "description": "Coopani 0.2.22+ · Bring a desktop teammate into Project Zomboid on Windows! She reads live game state directly—no screen capture, no spoilers.\n\n- **Always watching out for you**: reminds you when dusk is falling, warns when zombies close in, reacts when you get bitten or injured, and celebrates when you find a sledgehammer or generator in a container.\n- **Notices how you feel**: keeps an eye on your hunger, thirst, fatigue, panic, and weapon durability, plus reminds you about free Life and Living TV shows early on.\n- **Four personalities**: pick from snarky teammate, steady partner, jumpy underclassman, or serious-mode-only.\n- **Hands-off by default**: never touches your controls unless experimental auto-play is explicitly enabled in config (`worlds.pz.allowPlay: true`).\n- **Zero-hassle setup**: automatically places the CoopaniBridge Lua mod into Zomboid/mods/—just enable it once in-game. Feedback QQ group: 284525159."
       },
       "zh": {
         "displayName": "僵毁陪玩",
-        "description": "Coopani 0.2.17+ · 在 Windows 上给你的《僵尸毁灭工程》配一个真正懂局势的桌宠队友！她读的是游戏内部真实状态，不靠截屏也不剧透。\n\n- **实时盯着战况**：天要黑了催你回屋、周围丧尸多起来提醒你留神、掉血或被咬时会心疼又急着问伤口；当你亲手翻出大锤、发电机或好武器时，她也会跟着兴奋。\n- **连你的状态也一起记挂**：饿了、渴了、累了、武器快磨坏了，甚至前期电视上有免费技能节目（Life and Living TV）她都会顺口提醒一句。\n- **四种性格随便挑**：毒舌队友、稳重搭档、慌里慌张的学妹，或者平时损你、危急时刻瞬间严肃的「按局面切换」。\n- **默认只陪聊不抢鼠标**：平时绝不干扰操作；实验性自主操作模式可通过配置文件 `worlds.pz.allowPlay: true` 开启（暂未开放设置页开关）。\n- **装起来很省心**：首次启动会自动把桥接小 mod（CoopaniBridge）放进 Zomboid/mods/，在游戏模组列表勾一次启用就能用。"
+        "description": "Coopani 0.2.22+ · 在 Windows 上给你的《僵尸毁灭工程》配一个真正懂局势的桌宠队友！她读的是游戏内部真实状态，不靠截屏也不剧透。\n\n- **实时盯着战况**：天要黑了催你回屋、周围丧尸多起来提醒你留神、掉血或被咬时会心疼又急着问伤口；当你亲手翻出大锤、发电机或好武器时，她也会跟着兴奋。\n- **连你的状态也一起记挂**：饿了、渴了、累了、武器快磨坏了，甚至前期电视上有免费技能节目（Life and Living TV）她都会顺口提醒一句。\n- **四种性格随便挑**：毒舌队友、稳重搭档、慌里慌张的学妹，或者平时损你、危急时刻瞬间严肃的「按局面切换」。\n- **默认只陪聊不抢鼠标**：平时绝不干扰操作；实验性自主操作模式可通过配置文件 `worlds.pz.allowPlay: true` 开启（暂未开放设置页开关）。\n- **装起来很省心**：首次启动会自动把桥接小 mod（CoopaniBridge）放进 Zomboid/mods/，在游戏模组列表勾一次启用就能用。有反馈可以来 QQ 群 284525159。"
       }
     }
   },

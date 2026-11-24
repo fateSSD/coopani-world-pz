@@ -59,6 +59,7 @@ const TEXT = {
       adaptive: '按局面切换',
     },
     fail: '面板连不上服务端',
+    qqGroup: 'QQ 群 284525159',
     emptyGame: '进游戏读档之后，这里会显示她看到的东西。',
     day: (n, clock) => `第 ${n} 天 ${clock}`,
   },
@@ -112,6 +113,7 @@ const TEXT = {
       adaptive: 'Switches by situation',
     },
     fail: 'Panel cannot reach the server',
+    qqGroup: 'QQ group 284525159',
     emptyGame: 'Load a save and this fills in with what she sees.',
     day: (n, clock) => `Day ${n} ${clock}`,
   },
@@ -291,14 +293,15 @@ function mount(ctx) {
     }
 
     const voice = t.personaName[s.persona] ?? s.persona ?? '';
-    // 页脚只放三个短东西。原来把 install 的完整说明和整条存档路径都塞进来，
+    // 页脚只放几个短东西。原来把 install 的完整说明和整条存档路径都塞进来，
     // 那条说明是「从 1.2.1 升到 1.2.2：覆盖 8 个文件，清掉 1 个旧文件。模组列表已替你勾上…」，
     // 加上 `C://Users//...//Zomboid` 整条路径，页脚会被撑成好几行 —— 看起来就像布局坏了。
-    // 完整内容挪到 title，鼠标停上去能看全。
+    // 完整内容挪到 title，鼠标停上去能看全。反馈入口就靠这行群号：这个面板没有别的出口。
     foot.textContent = [
       `${t.persona}：${voice}`,
       `${t.bridge}：${s.installShort ?? '—'}`,
       `v${s.version}`,
+      t.qqGroup,
     ].filter(Boolean).join('　·　');
     const detail = [s.install, s.root].filter(Boolean).join('\n');
     if (detail) foot.title = detail;
