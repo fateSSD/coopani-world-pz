@@ -1,6 +1,6 @@
 {
   "name": "coopani-world-pz",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "type": "module",
   "description": "Coopani 0.2.17+ · 僵毁陪玩（Windows）· 让桌宠陪你一起打《僵尸毁灭工程》：天黑催你回家、被尸群围住提醒你跑、翻到好武器替你高兴；默认只陪聊、设置页不提供自动操作开关，实验性自主操作仅供手动配置 worlds.pz.allowPlay: true 开启。",
   "author": {
